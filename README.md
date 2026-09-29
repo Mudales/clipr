@@ -7,6 +7,14 @@ Light, keyboard-driven clipboard history for macOS and Linux (Hyprland), written
 - Fuzzy search as you type
 - Paste straight into the app you were using, or **type it out** as keystrokes
 
+## Install (macOS & Linux, no Rust needed)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/install.sh | sh
+```
+
+Uninstall: `curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/install.sh | sh -s -- --uninstall`
+
 ## Keys (in the picker)
 
 | Key | Action |
@@ -23,7 +31,7 @@ Light, keyboard-driven clipboard history for macOS and Linux (Hyprland), written
 | Tab | switch History ⇄ Saved |
 | Esc | close |
 
-## Build
+## Build from source
 
 ```sh
 cargo build --release   # binary: target/release/clipr
@@ -73,3 +81,8 @@ Then `hyprctl reload` and start it once by hand: `~/.cargo/bin/clipr &`.
 
 Terminals (Alacritty, Ghostty, kitty, …) automatically get Ctrl+Shift+V instead of Ctrl+V.
 Debug by running `~/.cargo/bin/clipr` in a terminal and watching its output.
+
+## Releasing
+
+Push a tag (`git tag v0.1.1 && git push --tags`) — GitHub Actions builds the macOS
+universal app and the Linux binary and attaches them to a release, which `install.sh` downloads.

@@ -23,6 +23,7 @@ USAGE:
     clipr            run the background daemon (records history, global hotkey on macOS)
     clipr toggle     open/close the picker (starts the daemon if needed) — bind this to a key
     clipr pick       open the picker directly
+    clipr --version  print the version
 ";
 
 fn main() -> ExitCode {
@@ -30,6 +31,10 @@ fn main() -> ExitCode {
         None | Some("daemon") => daemon::run(),
         Some("toggle") => toggle(),
         Some("pick") => ui::run(ui::Mode::OneShot),
+        Some("-V" | "--version") => {
+            println!("clipr {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some("-h" | "--help" | "help") => {
             print!("{HELP}");
             Ok(())

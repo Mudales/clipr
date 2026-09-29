@@ -1,0 +1,59 @@
+name: release
+
+# Push a tag like v0.1.0 to build and publish prebuilt binaries for install.sh.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+      - name: Universal clipr.app
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/clipr \
+            target/aarch64-apple-darwin/release/clipr \
+            target/x86_64-apple-darwin/release/clipr
+          scripts/bundle-macos.sh dist/clipr dist "${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent dist/clipr.app clipr-macos-universal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: clipr-macos-universal.zip
+
+  linux:
+    # Oldest supported Ubuntu, so the binary runs on older glibc too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release
+      - run: tar -czf clipr-linux-x86_64.tar.gz -C target/release clipr
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: clipr-linux-x86_64.tar.gz
+
+  publish:
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes \
+            clipr-macos-universal.zip clipr-linux-x86_64.tar.gz
