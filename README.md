@@ -37,7 +37,13 @@ cargo build --release   # binary: target/release/clipr
 
 Press **⌘⇧V** to open the picker. Always start clipr as the app (not the bare binary
 from a terminal), otherwise macOS asks the *terminal* for Accessibility permission.
-Rebuilding changes the app's signature, so macOS may ask for the permission again.
+
+**Keep the permission across rebuilds:** macOS ties it to the app's signature. Create a
+self-signed certificate once — Keychain Access → Certificate Assistant → *Create a
+Certificate…*, name `clipr-dev`, Identity Type *Self Signed Root*, Certificate Type
+*Code Signing* — and `install-macos.sh` will sign with it. Without it, each rebuild
+needs the permission re-granted (remove the old `clipr` entry first, or run
+`tccutil reset Accessibility dev.clipr`).
 
 - The first paste asks for **Accessibility** permission (System Settings → Privacy & Security → Accessibility) — needed to press ⌘V for you.
 - macOS may ask once about clipboard access — choose *Always Allow*.

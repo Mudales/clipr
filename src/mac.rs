@@ -59,7 +59,8 @@ fn wait_for_modifiers_released() {
 }
 
 fn source() -> Result<CGEventSource> {
-    if !accessibility_trusted(true) {
+    // Don't re-prompt on every paste; the prompt is shown once at startup.
+    if !accessibility_trusted(false) {
         bail!("Accessibility permission is needed to paste/type (System Settings → Privacy & Security → Accessibility)");
     }
     CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| anyhow!("no event source"))

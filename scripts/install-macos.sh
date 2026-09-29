@@ -25,6 +25,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - --identifier dev.clipr "$APP"
+# macOS ties the Accessibility permission to the signature. An ad-hoc signature
+# changes on every build (so macOS asks again); a stable self-signed
+# "clipr-dev" code-signing certificate (see README) keeps the permission.
+IDENTITY="${CLIPR_SIGN_IDENTITY:-clipr-dev}"
+if security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
+    codesign --force --sign "$IDENTITY" --identifier dev.clipr "$APP"
+else
+    echo "note: no '$IDENTITY' certificate, signing ad-hoc (Accessibility must be re-granted after each build)"
+    codesign --force --sign - --identifier dev.clipr "$APP"
+fi
 open "$APP"
 echo "Installed $APP"
