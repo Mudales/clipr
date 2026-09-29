@@ -107,7 +107,9 @@ install_linux() {
     echo
     echo "clipr is installed at $LINUX_BIN and running."
     echo
-    if [ -f "$HOME/.config/hypr/hyprland.lua" ]; then
+    if grep -qs "clipr" "$HOME"/.config/hypr/*.lua "$HOME"/.config/hypr/*.conf 2>/dev/null; then
+        echo "Your Hyprland config already starts clipr — nothing to add."
+    elif [ -f "$HOME/.config/hypr/hyprland.lua" ]; then
         # Hyprland 0.56+ / Omarchy: Lua config (hyprland.conf is ignored).
         cat <<EOF
 Your Hyprland uses a Lua config. Add these lines, then run 'hyprctl reload'

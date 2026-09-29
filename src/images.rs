@@ -25,10 +25,12 @@ fn encode_png(img: &RgbaImage) -> Result<Vec<u8>> {
 
 fn store(img: RgbaImage, png: Option<Vec<u8>>) -> Result<Stored> {
     let (width, height) = img.dimensions();
+    // Shrink to fit THUMB_MAX, never enlarge.
+    let longest = width.max(height).max(THUMB_MAX);
     let thumb = image::imageops::thumbnail(
         &img,
-        (width * THUMB_MAX / width.max(height)).max(1),
-        (height * THUMB_MAX / width.max(height)).max(1),
+        (width * THUMB_MAX / longest).max(1),
+        (height * THUMB_MAX / longest).max(1),
     );
     let png = match png {
         Some(png) => png,
