@@ -1,0 +1,4 @@
+# Link the C runtime into clipr.exe, so it runs on PCs without the Visual C++
+# Redistributable (otherwise: "VCRUNTIME140.dll was not found").
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

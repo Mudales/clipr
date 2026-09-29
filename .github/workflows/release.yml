@@ -49,6 +49,14 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo build --release
       - run: cargo test --release
+      - name: Check the exe needs no Visual C++ runtime DLL
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe |
+            Where-Object FullName -like '*Hostx64\x64*' | Select-Object -First 1
+          $deps = & $dumpbin.FullName /dependents target/release/clipr.exe
+          $deps
+          if ($deps -match 'VCRUNTIME|MSVCP|api-ms-win-crt') { throw 'clipr.exe depends on the VC++ runtime' }
       - run: Compress-Archive -Path target/release/clipr.exe -DestinationPath clipr-windows-x86_64.zip
         shell: pwsh
       - uses: actions/upload-artifact@v4
