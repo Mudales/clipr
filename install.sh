@@ -122,7 +122,7 @@ Your Hyprland uses a Lua config. Add these lines, then run 'hyprctl reload'
     o.launch_on_start(os.getenv("HOME") .. "/.local/bin/clipr")
 
   ~/.config/hypr/hyprland.lua (at the end):
-    o.window("^(clipr)$", { float = true, center = true })
+    o.window("^(clipr)$", { float = true, center = true, stay_focused = true })
 EOF
     else
         cat <<EOF
@@ -133,6 +133,7 @@ Add this to ~/.config/hypr/hyprland.conf, then run 'hyprctl reload'
   bind = SUPER SHIFT, V, exec, $LINUX_BIN toggle
   windowrule = float, class:^(clipr)$
   windowrule = center, class:^(clipr)$
+  windowrule = stayfocused, class:^(clipr)$
 EOF
     fi
 }

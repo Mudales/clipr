@@ -23,7 +23,7 @@ Uninstall: `curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/in
 | ↑ ↓ PgUp PgDn | move |
 | Enter | paste into the previous app |
 | ⌘/Ctrl + 1–9 | paste item 1–9 |
-| Shift + Enter | copy only |
+| ⌘/Ctrl + C, or Shift + Enter | copy only (any clip, not just 1–9) |
 | ⌘/Ctrl + Enter | type it out (for fields that block paste) |
 | ⌘/Ctrl + S | save / unsave |
 | ⌘/Ctrl + P | pin / unpin (pinned stay at the top of History) |
@@ -71,7 +71,7 @@ o.bind("SUPER + SHIFT + V", "clipr clipboard history", os.getenv("HOME") .. "/.l
 -- ~/.config/hypr/autostart.lua
 o.launch_on_start(os.getenv("HOME") .. "/.local/bin/clipr")
 -- ~/.config/hypr/hyprland.lua (at the end)
-o.window("^(clipr)$", { float = true, center = true })
+o.window("^(clipr)$", { float = true, center = true, stay_focused = true })
 ```
 
 **Older Hyprland (`hyprland.conf`):**
@@ -81,6 +81,7 @@ exec-once = ~/.local/bin/clipr
 bind = SUPER SHIFT, V, exec, ~/.local/bin/clipr toggle
 windowrule = float, class:^(clipr)$
 windowrule = center, class:^(clipr)$
+windowrule = stayfocused, class:^(clipr)$
 ```
 
 Then `hyprctl reload`. Terminals (Alacritty, Ghostty, kitty, ...) automatically get

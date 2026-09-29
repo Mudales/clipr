@@ -430,6 +430,12 @@ impl Picker {
             if i.consume_key(Modifiers::SHIFT, Key::Tab) || i.consume_key(Modifiers::NONE, Key::Tab) {
                 action = Some("TAB");
             }
+            // ⌘C / Ctrl+C copies the selected clip (egui reports it as a Copy
+            // event, not a key press).
+            if i.events.iter().any(|e| matches!(e, egui::Event::Copy)) {
+                i.events.retain(|e| !matches!(e, egui::Event::Copy));
+                action = Some("COPY");
+            }
             // Order matters: modified Enter first.
             if i.consume_key(cmd, Key::Enter) {
                 action = Some("TYPE");
@@ -693,9 +699,9 @@ impl Picker {
         let text = match &self.status {
             Some(s) => s.clone(),
             None if cfg!(target_os = "macos") => {
-                "↩ Paste    ⌘↩ Type    ⇧↩ Copy    ⌘S Save    ⌘P Pin    ⌘D Delete    Tab Switch".into()
+                "↩ Paste    ⌘↩ Type    ⌘C Copy    ⌘S Save    ⌘P Pin    ⌘D Delete    Tab Switch".into()
             }
-            None => "Enter Paste   Ctrl+Enter Type   Shift+Enter Copy   Ctrl+S Save   Ctrl+P Pin   Ctrl+D Delete".into(),
+            None => "Enter Paste   Ctrl+Enter Type   Ctrl+C Copy   Ctrl+S Save   Ctrl+P Pin   Ctrl+D Delete".into(),
         };
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
         ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.border));
@@ -763,10 +769,12 @@ impl eframe::App for Picker {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // Close when the user clicks away.
+        // macOS: close when the user clicks away, like Maccy. Not on Linux:
+        // Hyprland moves focus with the mouse, so merely moving the pointer
+        // off the popup would close it (Esc / the hotkey close it instead).
         match ctx.input(|i| i.viewport().focused) {
             Some(true) => self.was_focused = true,
-            Some(false) if self.was_focused => self.close(&ctx, false),
+            Some(false) if self.was_focused && cfg!(target_os = "macos") => self.close(&ctx, false),
             _ => {}
         }
 
