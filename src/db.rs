@@ -31,6 +31,8 @@ pub enum Payload {
 
 pub struct Db {
     conn: Connection,
+    history_limit: i64,
+    image_limit: i64,
 }
 
 pub fn data_dir() -> PathBuf {
@@ -75,7 +77,7 @@ impl Db {
                  ALTER TABLE clips ADD COLUMN thumb BLOB;",
             )?;
         }
-        Ok(Self { conn })
+        Ok(Self { conn, history_limit: HISTORY_LIMIT, image_limit: IMAGE_LIMIT })
     }
 
     /// Record a copied text. Re-copying an existing clip moves it to the top.
@@ -108,7 +110,7 @@ impl Db {
     }
 
     fn trim(&self) -> Result<()> {
-        for (filter, limit) in [("", HISTORY_LIMIT), ("AND kind = 1", IMAGE_LIMIT)] {
+        for (filter, limit) in [("", self.history_limit), ("AND kind = 1", self.image_limit)] {
             self.conn.execute(
                 &format!(
                     "DELETE FROM clips WHERE pinned = 0 AND saved_at IS NULL {filter} AND id NOT IN (
@@ -119,6 +121,12 @@ impl Db {
             )?;
         }
         Ok(())
+    }
+
+    /// Sets how many unpinned, unsaved clips / images are kept (from Settings).
+    pub fn set_limits(&mut self, history: usize, images: usize) {
+        self.history_limit = history as i64;
+        self.image_limit = images as i64;
     }
 
     /// Moves a clip to the top of the history.

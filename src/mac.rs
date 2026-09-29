@@ -119,6 +119,16 @@ pub fn frontmost_pid() -> Option<i32> {
     Some(app.processIdentifier())
 }
 
+/// Name and bundle id of the app in front (for Settings → Ignore apps).
+pub fn frontmost_app_names() -> Vec<String> {
+    let Some(app) = NSWorkspace::sharedWorkspace().frontmostApplication() else { return Vec::new() };
+    [app.localizedName(), app.bundleIdentifier()]
+        .into_iter()
+        .flatten()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 pub fn activate(pid: i32) {
     if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
         #[allow(deprecated)]

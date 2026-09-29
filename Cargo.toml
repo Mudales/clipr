@@ -1,6 +1,6 @@
 [package]
 name = "clipr"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 [features]
@@ -15,6 +15,7 @@ dirs = "7.0.0"
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 nucleo-matcher = "0.3.1"
+regex-lite = "0.1.9"
 rusqlite = "0.40.2"
 unicode-bidi = "0.3.18"
 

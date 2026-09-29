@@ -3,6 +3,7 @@ mod db;
 mod images;
 mod ipc;
 mod keys;
+mod settings;
 mod ui;
 
 #[cfg(target_os = "linux")]

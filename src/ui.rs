@@ -6,6 +6,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use crate::ipc;
 use crate::keys::{self, Action, Keymap};
+use crate::settings::{SearchMode, Settings, ThemeChoice};
+
+mod settings_page;
 use anyhow::{Result, anyhow};
 use eframe::egui::{
     self, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Sense,
@@ -19,6 +22,9 @@ use std::sync::{Arc, OnceLock};
 const ROW_H: f32 = 28.0;
 const WINDOW: [f32; 2] = [480.0, 440.0];
 const CORNER: f32 = 12.0;
+/// Transparent window with our own rounded corners on macOS; on Linux the
+/// compositor rounds the (opaque) window itself.
+const TRANSPARENT: bool = cfg!(target_os = "macos");
 const PREVIEW_CHARS: usize = 160;
 /// Only the start of very long clips is searched, to keep typing instant.
 const SEARCH_CHARS: usize = 4096;
@@ -59,6 +65,12 @@ pub fn request_toggle() {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+enum View {
+    List,
+    Settings,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum Tab {
     History,
     Saved,
@@ -90,6 +102,10 @@ struct Picker {
     scroll_offset: f32,
     view_height: f32,
     keys: Keymap,
+    settings: Settings,
+    view: View,
+    /// Edits in progress on the Settings page.
+    page: settings_page::Draft,
     /// Multi-selection (⌘A / Shift+↑↓), by clip id.
     marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
@@ -106,7 +122,7 @@ pub fn run(mode: Mode) -> Result<()> {
             .with_inner_size(WINDOW)
             .with_resizable(false)
             .with_decorations(false)
-            .with_transparent(true)
+            .with_transparent(TRANSPARENT)
             .with_always_on_top()
             .with_visible(mode == Mode::OneShot),
         centered: true,
@@ -126,7 +142,13 @@ pub fn run(mode: Mode) -> Result<()> {
             setup_fonts(&cc.egui_ctx);
             let _ = CONTEXT.set(cc.egui_ctx.clone());
             let mut picker = Picker::new(db, mode);
+            picker.status = picker.keys.errors.first().cloned();
+            picker.apply_settings(&cc.egui_ctx);
             picker.reload();
+            // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
+            if std::env::var("CLIPR_OPEN").is_ok_and(|v| v.starts_with("settings")) {
+                picker.enter_settings();
+            }
             Ok(Box::new(picker))
         }),
     )
@@ -225,6 +247,18 @@ fn visual_order(s: &str) -> String {
     out
 }
 
+/// A small gear icon (drawn, so it doesn't depend on the font).
+fn paint_gear(painter: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.6, color);
+    for i in 0..8 {
+        let a = i as f32 * std::f32::consts::TAU / 8.0;
+        let dir = vec2(a.cos(), a.sin());
+        painter.line_segment([c + dir * 5.0, c + dir * 7.5], Stroke::new(2.4, color));
+    }
+    painter.circle_stroke(c, 5.0, stroke);
+    painter.circle_filled(c, 1.8, color);
+}
+
 /// Largest rect with `size`'s aspect ratio that fits centered in `bounds`.
 fn fit_rect(size: egui::Vec2, bounds: egui::Rect) -> egui::Rect {
     let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
@@ -272,14 +306,17 @@ impl Picker {
             query: String::new(),
             selected: 0,
             matcher: Matcher::new(Config::DEFAULT),
-            status: None,
             was_focused: false,
             scroll_to_selected: true,
             scroll_offset: 0.0,
             view_height: 0.0,
             thumbs: RefCell::default(),
             marked: HashSet::new(),
+            status: None,
             keys: Keymap::load(),
+            settings: Settings::load(),
+            view: View::List,
+            page: settings_page::Draft::default(),
         }
     }
 
@@ -326,6 +363,11 @@ impl Picker {
         let query = self.query.trim();
         if query.is_empty() {
             self.filtered = (0..self.items.len()).collect();
+        } else if self.settings.search_mode == SearchMode::Exact {
+            let needle = query.to_lowercase();
+            self.filtered = (0..self.items.len())
+                .filter(|&i| search_prefix(&self.items[i].clip.content).to_lowercase().contains(&needle))
+                .collect();
         } else {
             let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
             let mut buf = Vec::new();
@@ -371,6 +413,9 @@ impl Picker {
 
     fn show(&mut self, ctx: &egui::Context) {
         self.keys = Keymap::load(); // pick up edits to keys.conf
+        self.settings = Settings::load();
+        self.apply_settings(ctx);
+        self.view = View::List;
         self.query.clear();
         self.marked.clear();
         self.selected = 0;
@@ -476,7 +521,22 @@ impl Picker {
         }
     }
 
+    fn apply_settings(&self, ctx: &egui::Context) {
+        ctx.set_theme(match self.settings.theme {
+            ThemeChoice::System => egui::ThemePreference::System,
+            ThemeChoice::Light => egui::ThemePreference::Light,
+            ThemeChoice::Dark => egui::ThemePreference::Dark,
+        });
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        if self.view == View::Settings {
+            // Let the settings fields have every key except Esc (= back).
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.leave_settings(ctx);
+            }
+            return;
+        }
         let mut actions = Vec::new();
         let mut quick = None;
         ctx.input_mut(|i| {
@@ -527,10 +587,18 @@ impl Picker {
             }
         }
         for action in actions {
+            self.run_action(ctx, action);
+        }
+    }
+
+    fn run_action(&mut self, ctx: &egui::Context, action: Action) {
+        {
             if matches!(action, Action::Save | Action::Pin | Action::Delete) {
                 self.status = None;
             }
             match action {
+                // "Paste automatically" off: choosing a clip only copies it.
+                Action::Paste if !self.settings.paste_automatically => self.choose(ctx, "COPY"),
                 Action::Paste => self.choose(ctx, "PASTE"),
                 Action::Copy => self.choose(ctx, "COPY"),
                 Action::Type => self.choose(ctx, "TYPE"),
@@ -545,14 +613,27 @@ impl Picker {
                 Action::NextTab | Action::PrevTab => self.switch_tab(),
                 Action::Close if !self.marked.is_empty() => self.marked.clear(),
                 Action::Close => self.close(ctx, true),
-                Action::Settings => self.open_settings(),
+                Action::Settings => self.enter_settings(),
             }
         }
     }
 
-    /// Opens keys.conf in the default text editor.
-    fn open_settings(&mut self) {
-        let path = keys::ensure_config();
+    fn enter_settings(&mut self) {
+        self.page = settings_page::Draft::new(&self.settings, &self.keys);
+        self.view = View::Settings;
+        self.status = None;
+    }
+
+    fn leave_settings(&mut self, ctx: &egui::Context) {
+        self.view = View::List;
+        self.keys = Keymap::load();
+        self.status = self.keys.errors.first().cloned();
+        self.apply_settings(ctx);
+        self.reload();
+    }
+
+    /// Opens a config file in the default text editor.
+    fn open_file(&mut self, path: std::path::PathBuf) {
         let result = if cfg!(target_os = "macos") {
             std::process::Command::new("open").arg("-t").arg(&path).spawn()
         } else {
@@ -569,8 +650,16 @@ impl Picker {
         let width = ui.available_width();
         let (row, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
         let seg_w = 150.0;
-        let field = row.with_max_x(row.right() - seg_w - 8.0);
-        let seg = row.with_min_x(row.right() - seg_w);
+        let gear_w = 30.0;
+        let field = row.with_max_x(row.right() - seg_w - gear_w - 12.0);
+        let seg = row.with_min_x(row.right() - seg_w - gear_w - 4.0).with_max_x(row.right() - gear_w - 4.0);
+        let gear = row.with_min_x(row.right() - gear_w);
+        let gear_resp = ui.interact(gear, ui.id().with("gear"), Sense::click());
+        ui.painter().rect_filled(gear, 8.0, if gear_resp.hovered() { t.hover } else { t.field });
+        paint_gear(ui.painter(), gear.center(), t.muted);
+        if gear_resp.on_hover_text("Settings").clicked() {
+            self.enter_settings();
+        }
 
         let painter = ui.painter();
         painter.rect_filled(field, 8.0, t.field);
@@ -650,7 +739,9 @@ impl Picker {
         let font = FontId::proportional(14.0);
         let small = FontId::proportional(12.0);
         let cmd = keys::format_mods(self.keys.quick);
-        let show_quick = self.keys.quick != Modifiers::NONE;
+        let show_quick = self.keys.quick != Modifiers::NONE && self.settings.show_numbers;
+        let mut menu_choice: Option<(usize, Action)> = None;
+        let mut right_clicked = None;
         let mut clicked = None;
         let mut double_clicked = false;
 
@@ -724,6 +815,15 @@ impl Picker {
                 if resp.clicked() {
                     clicked = Some(row);
                 }
+                if resp.secondary_clicked() {
+                    right_clicked = Some(row);
+                }
+                resp.context_menu(|ui| {
+                    if let Some(a) = self.row_menu(ui, item) {
+                        menu_choice = Some((row, a));
+                        ui.close();
+                    }
+                });
                 if resp.double_clicked() {
                     double_clicked = true;
                 }
@@ -731,10 +831,24 @@ impl Picker {
         });
         self.scroll_offset = out.state.offset.y;
         self.view_height = out.inner_rect.height();
-        self.image_preview(ui, ctx, t, out.inner_rect);
+        if self.settings.show_preview {
+            self.image_preview(ui, ctx, t, out.inner_rect);
+        }
 
         if let Some(row) = clicked {
             self.selected = row;
+        }
+        // Right-click selects the row (keeping a multi-selection it's part of).
+        if let Some(row) = right_clicked {
+            let id = self.items[self.filtered[row]].clip.id;
+            if !self.marked.contains(&id) {
+                self.marked.clear();
+            }
+            self.selected = row;
+        }
+        if let Some((row, action)) = menu_choice {
+            self.selected = row;
+            self.run_action(ctx, action);
         }
         if double_clicked {
             self.choose(ctx, "PASTE");
@@ -753,6 +867,43 @@ impl Picker {
                 t.muted,
             );
         }
+    }
+
+    /// Right-click menu for a row; returns the chosen action.
+    fn row_menu(&self, ui: &mut egui::Ui, item: &Item) -> Option<Action> {
+        ui.set_min_width(190.0);
+        let multi = self.marked.len() > 1 && self.marked.contains(&item.clip.id);
+        let n = self.marked.len();
+        let entries: Vec<Option<(Action, String)>> = vec![
+            Some((Action::Paste, if multi { format!("Paste {n} clips") } else { "Paste".into() })),
+            (!item.clip.is_image && !multi).then(|| (Action::Type, "Type out".into())),
+            Some((Action::Copy, if multi { format!("Copy {n} clips") } else { "Copy".into() })),
+            None,
+            (!multi).then(|| (Action::Pin, if item.clip.pinned { "Unpin" } else { "Pin" }.into())),
+            (!multi).then(|| (Action::Save, if item.clip.saved { "Unsave" } else { "Save" }.into())),
+            Some((Action::Delete, if multi { format!("Delete {n} clips") } else { "Delete".into() })),
+            None,
+            Some((Action::SelectAll, "Select all".into())),
+            Some((Action::Settings, "Settings…".into())),
+        ];
+        let mut chosen = None;
+        for entry in entries {
+            match entry {
+                None => {
+                    ui.separator();
+                }
+                Some((action, label)) => {
+                    let mut button = egui::Button::new(label);
+                    if let Some(k) = self.keys.label(action) {
+                        button = button.shortcut_text(k);
+                    }
+                    if ui.add(button).clicked() {
+                        chosen = Some(action);
+                    }
+                }
+            }
+        }
+        chosen
     }
 
     /// Larger preview of the selected image, in the half of the list away
@@ -783,12 +934,20 @@ impl Picker {
     }
 
     fn footer(&self, ui: &mut egui::Ui, t: &Theme) {
+        let font = FontId::proportional(11.5);
+        let max_w = ui.available_width() - 8.0;
+        // As many hints as fit, in order of importance.
         let hint = |actions: &[(Action, &str)]| {
-            actions
-                .iter()
-                .filter_map(|(a, name)| self.keys.label(*a).map(|k| format!("{k} {name}")))
-                .collect::<Vec<_>>()
-                .join("   ")
+            let mut out = String::new();
+            for (a, name) in actions {
+                let Some(k) = self.keys.label(*a) else { continue };
+                let next = if out.is_empty() { format!("{k} {name}") } else { format!("{out}   {k} {name}") };
+                if ui.painter().layout_no_wrap(next.clone(), font.clone(), t.muted).size().x > max_w {
+                    break;
+                }
+                out = next;
+            }
+            out
         };
         let text = match &self.status {
             Some(s) => s.clone(),
@@ -810,7 +969,7 @@ impl Picker {
                 (Action::Pin, "Pin"),
                 (Action::Delete, "Delete"),
                 (Action::NextTab, "Tabs"),
-                (Action::Settings, "Keys"),
+                (Action::Settings, "Settings"),
             ]),
         };
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
@@ -819,7 +978,7 @@ impl Picker {
             rect.left_center() + vec2(4.0, 2.0),
             Align2::LEFT_CENTER,
             text,
-            FontId::proportional(11.5),
+            font,
             t.muted,
         );
     }
@@ -872,8 +1031,12 @@ impl eframe::App for Picker {
     }
 
     /// Transparent, so our rounded panel gives the window its shape.
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        [0.0; 4]
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if TRANSPARENT {
+            [0.0; 4]
+        } else {
+            Theme::new(visuals.dark_mode).bg.to_opaque().to_normalized_gamma_f32()
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -884,7 +1047,7 @@ impl eframe::App for Picker {
         // off the popup would close it (Esc / the hotkey close it instead).
         match ctx.input(|i| i.viewport().focused) {
             Some(true) => self.was_focused = true,
-            Some(false) if self.was_focused && cfg!(target_os = "macos") => self.close(&ctx, false),
+            Some(false) if self.was_focused && self.settings.close_on_click_away => self.close(&ctx, false),
             _ => {}
         }
 
@@ -899,12 +1062,19 @@ impl eframe::App for Picker {
             .inner_margin(10.0)
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
+                if self.view == View::Settings {
+                    self.settings_page(ui, &ctx, &t);
+                    return;
+                }
                 self.header(ui, &t);
                 ui.add_space(8.0);
-                let list_h = ui.available_height() - 26.0;
+                let footer_h = if self.settings.show_footer || self.status.is_some() { 26.0 } else { 0.0 };
+                let list_h = ui.available_height() - footer_h;
                 self.list(ui, &ctx, &t, list_h);
-                ui.add_space(4.0);
-                self.footer(ui, &t);
+                if footer_h > 0.0 {
+                    ui.add_space(4.0);
+                    self.footer(ui, &t);
+                }
             });
     }
 }

@@ -78,6 +78,69 @@ pub struct Keymap {
     pub errors: Vec<String>,
     /// Actions set to nothing in the file (`pin =`), i.e. disabled.
     empty: Vec<Action>,
+    /// Effective setting text by name (`"paste"` → `"Enter, Mod+V"`), for the
+    /// Settings page.
+    raw: Vec<(String, String)>,
+}
+
+/// Editable entries in the order the Settings page shows them, with labels.
+pub const EDITABLE: &[(&str, &str)] = &[
+    ("paste", "Paste"),
+    ("type", "Type out"),
+    ("copy", "Copy"),
+    ("save", "Save / unsave"),
+    ("pin", "Pin / unpin"),
+    ("delete", "Delete"),
+    ("select_all", "Select all"),
+    ("next_tab", "Next tab"),
+    ("prev_tab", "Previous tab"),
+    ("close", "Close"),
+    ("settings", "Settings"),
+    ("quick_paste", "Paste 1–9 modifier"),
+    ("hotkey", "Open clipr (macOS, needs restart)"),
+];
+
+/// Checks one setting's text; `Err` has a message for the user.
+pub fn validate(name: &str, value: &str) -> Result<(), String> {
+    match name {
+        "hotkey" => {
+            if value.is_empty() || parse_shortcut(value).is_ok() {
+                Ok(())
+            } else {
+                Err("e.g. Cmd+Shift+V".into())
+            }
+        }
+        "quick_paste" => value
+            .split('+')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .try_for_each(|t| parse_mods(t).map(|_| ()).ok_or_else(|| format!("unknown modifier '{t}'"))),
+        _ => value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .try_for_each(|s| parse_shortcut(s).map(|_| ())),
+    }
+}
+
+/// Writes keys.conf: the commented defaults with `values` filled in.
+pub fn save(values: &[(String, String)]) -> std::io::Result<()> {
+    let mut out = String::new();
+    for line in DEFAULTS.lines() {
+        let name = line.split_once('=').map(|(n, _)| n.trim()).filter(|_| !line.starts_with('#'));
+        match name.and_then(|n| values.iter().find(|(k, _)| k == n)) {
+            Some((k, v)) => out.push_str(&format!("{k:<10} = {v}\n")),
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    let path = config_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, out)
 }
 
 pub fn config_path() -> PathBuf {
@@ -156,8 +219,19 @@ impl Keymap {
                 map.hotkey = user.hotkey;
             }
             map.errors = user.errors;
+            for (k, v) in user.raw {
+                match map.raw.iter_mut().find(|(n, _)| *n == k) {
+                    Some(entry) => entry.1 = v,
+                    None => map.raw.push((k, v)),
+                }
+            }
         }
         map
+    }
+
+    /// The setting's current text, e.g. `"Enter, Mod+V"`.
+    pub fn raw(&self, name: &str) -> String {
+        self.raw.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default()
     }
 
     /// Actions the user explicitly set to nothing (`pin =`).
@@ -172,12 +246,16 @@ impl Keymap {
             hotkey: "Cmd+Shift+V".into(),
             errors: Vec::new(),
             empty: Vec::new(),
+            raw: Vec::new(),
         };
         for (n, line) in text.lines().enumerate() {
             let line = line.split('#').next().unwrap_or("").trim();
             let Some((name, value)) = line.split_once('=') else { continue };
             let (name, value) = (name.trim(), value.trim());
             let err = |e: String| format!("keys.conf line {}: {e}", n + 1);
+            if name == "hotkey" || name == "quick_paste" || ACTIONS.iter().any(|(a, _)| *a == name) {
+                map.raw.push((name.to_owned(), value.to_owned()));
+            }
             match name {
                 "hotkey" => map.hotkey = value.to_owned(),
                 "quick_paste" => {

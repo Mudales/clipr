@@ -6,6 +6,7 @@ Light, keyboard-driven clipboard history for macOS and Linux (Hyprland), written
 - **Saved** tab for clips you use often (numbered in the order you saved them)
 - Fuzzy search as you type
 - Paste straight into the app you were using, or **type it out** as keystrokes
+- Right-click menu, Maccy-style Settings page and editable shortcuts
 
 ## Install (macOS & Linux, no Rust needed)
 
@@ -33,17 +34,29 @@ Defaults (⌘ on macOS, Ctrl on Linux). All of them can be changed, see below.
 | ⌘/Ctrl + A | select all shown clips (again to unselect), then Delete clears the history |
 | Shift + ↑ ↓ | extend the selection; copy/paste then joins the selected clips line by line |
 | Ctrl + Tab, Ctrl + Shift + Tab | switch History ⇄ Saved |
-| ⌘/Ctrl + , | edit the keyboard shortcuts |
+| ⌘/Ctrl + , or ⚙ | Settings |
+| right-click a clip | menu with every action |
 | Esc | clear the selection, or close |
 
 On a Mac keyboard the key labelled *delete* is Backspace, which also edits the search
 text, so deleting a clip is ⌘⌫ (or fn+⌫).
 
-### Changing the shortcuts
+## Settings
 
-Press ⌘/Ctrl + , in the picker, or edit `~/.config/clipr/keys.conf` (`clipr keys` prints
-the path). The file lists every action with its default; changes apply the next time the
-picker opens. The macOS global shortcut (`hotkey = Cmd+Shift+V`) applies after restarting
+Open with ⚙ (next to the tabs) or ⌘/Ctrl + ,. Changes are saved immediately to
+`~/.config/clipr/settings.conf`.
+
+- **General:** paste automatically (off = choosing a clip only copies it), close when
+  clicking outside, fuzzy or exact search, open at login (macOS)
+- **Storage:** history size, save images and how many to keep, clear history
+  (keeps pinned & saved)
+- **Appearance:** system / light / dark theme, image preview, 1–9 hints, footer hints
+- **Ignore:** apps whose copies are never saved (app name or bundle id on macOS,
+  window class on Linux) and regular expressions for text that is never saved
+- **Keyboard shortcuts:** edit every shortcut; invalid entries are flagged and not saved
+
+The shortcuts live in `~/.config/clipr/keys.conf` (`clipr keys` prints the path) and can
+also be edited by hand. The macOS global shortcut (`hotkey`) applies after restarting
 clipr; on Linux the global shortcut lives in your Hyprland config.
 
 ## Build from source

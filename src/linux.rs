@@ -34,16 +34,16 @@ fn run(cmd: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn active_window_is_terminal() -> bool {
-    let Ok(out) = Command::new("hyprctl").args(["activewindow", "-j"]).output() else {
-        return false;
-    };
+/// Window class of the focused window (Hyprland).
+pub fn active_window_class() -> Option<String> {
+    let out = Command::new("hyprctl").args(["activewindow", "-j"]).output().ok()?;
     let json = String::from_utf8_lossy(&out.stdout).to_lowercase();
     // Cheap parse: find `"class": "<name>"`.
-    json.split("\"class\":")
-        .nth(1)
-        .and_then(|rest| rest.split('"').nth(1))
-        .is_some_and(|class| TERMINALS.contains(&class))
+    json.split("\"class\":").nth(1)?.split('"').nth(1).map(str::to_owned)
+}
+
+fn active_window_is_terminal() -> bool {
+    active_window_class().is_some_and(|class| TERMINALS.contains(&class.as_str()))
 }
 
 pub fn send_paste() -> Result<()> {

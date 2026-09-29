@@ -2,6 +2,7 @@
 //! pasting, launches the picker popup and sends the paste keystroke.
 
 use crate::db::{Db, Payload};
+use crate::settings::Settings;
 use crate::{ipc, platform};
 use anyhow::{Context, Result, bail};
 use std::io::{BufRead, BufReader};
@@ -60,7 +61,7 @@ fn log_err(what: &str, r: Result<()>) {
 
 #[cfg(target_os = "macos")]
 fn watch_clipboard() -> Result<()> {
-    let db = Db::open()?;
+    let mut db = Db::open()?;
     let mut clipboard = arboard::Clipboard::new()?;
     let mut last_count = platform::change_count() - 1;
 
@@ -76,11 +77,20 @@ fn watch_clipboard() -> Result<()> {
         if platform::should_skip_current() {
             continue;
         }
+        let settings = Settings::load();
+        if platform::frontmost_app_names().iter().any(|a| settings.ignores_app(a)) {
+            continue;
+        }
+        db.set_limits(settings.history_size, settings.image_limit);
         if let Ok(text) = clipboard.get_text() {
-            log_err("db", db.add(&text));
-        } else if let Ok(img) = clipboard.get_image() {
-            let stored = crate::images::from_rgba(img.width as u32, img.height as u32, img.bytes.into_owned());
-            log_err("image", stored.and_then(|s| db.add_image(&s)));
+            if !settings.ignores_text(&text) {
+                log_err("db", db.add(&text));
+            }
+        } else if settings.save_images {
+            if let Ok(img) = clipboard.get_image() {
+                let stored = crate::images::from_rgba(img.width as u32, img.height as u32, img.bytes.into_owned());
+                log_err("image", stored.and_then(|s| db.add_image(&s)));
+            }
         }
     }
 }
@@ -95,14 +105,18 @@ fn watch_clipboard() -> Result<()> {
             thread::park();
         }
     }
-    let db = Db::open()?;
+    let mut db = Db::open()?;
     let mut clipboard = arboard::Clipboard::new()?;
     let mut last: Option<String> = None;
     loop {
         thread::sleep(POLL);
         if let Ok(text) = clipboard.get_text() {
             if last.as_deref() != Some(text.as_str()) {
-                log_err("db", db.add(&text));
+                let settings = Settings::load();
+                db.set_limits(settings.history_size, settings.image_limit);
+                if !settings.ignores_text(&text) {
+                    log_err("db", db.add(&text));
+                }
                 last = Some(text);
             }
         }
@@ -116,12 +130,26 @@ pub fn store_from_stdin() -> Result<()> {
     if matches!(std::env::var("CLIPBOARD_STATE").as_deref(), Ok("sensitive" | "clear")) {
         return Ok(());
     }
+    let settings = Settings::load();
+    #[cfg(target_os = "linux")]
+    if !settings.ignore_apps.is_empty()
+        && platform::active_window_class().is_some_and(|c| settings.ignores_app(&c))
+    {
+        return Ok(());
+    }
     let mut data = Vec::new();
     std::io::stdin().take((crate::images::MAX_IMAGE_BYTES + 1) as u64).read_to_end(&mut data)?;
-    let db = Db::open()?;
+    let mut db = Db::open()?;
+    db.set_limits(settings.history_size, settings.image_limit);
     if crate::images::looks_like_image(&data) {
+        if !settings.save_images {
+            return Ok(());
+        }
         db.add_image(&crate::images::from_encoded(&data)?)
     } else if let Ok(text) = String::from_utf8(data) {
+        if settings.ignores_text(&text) {
+            return Ok(());
+        }
         db.add(&text)
     } else {
         Ok(())
