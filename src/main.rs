@@ -2,6 +2,7 @@ mod daemon;
 mod db;
 mod images;
 mod ipc;
+mod keys;
 mod ui;
 
 #[cfg(target_os = "linux")]
@@ -26,6 +27,7 @@ USAGE:
     clipr pick       open the picker directly
     clipr store      save clipboard data from stdin (used by `wl-paste --watch`)
     clipr clear      delete the history, keeping pinned and saved clips
+    clipr keys       print the path of the keyboard-shortcut file (keys.conf)
     clipr --version  print the version
 ";
 
@@ -38,6 +40,10 @@ fn main() -> ExitCode {
         Some("clear") => db::Db::open()
             .and_then(|db| db.clear())
             .map(|n| println!("cleared {n} clips (kept pinned & saved)")),
+        Some("keys" | "config") => {
+            println!("{}", keys::ensure_config().display());
+            Ok(())
+        }
         Some("-V" | "--version") => {
             println!("clipr {}", env!("CARGO_PKG_VERSION"));
             Ok(())

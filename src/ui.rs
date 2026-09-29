@@ -5,6 +5,7 @@ use crate::images::parse_key;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use crate::ipc;
+use crate::keys::{self, Action, Keymap};
 use anyhow::{Result, anyhow};
 use eframe::egui::{
     self, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Sense,
@@ -88,6 +89,7 @@ struct Picker {
     scroll_to_selected: bool,
     scroll_offset: f32,
     view_height: f32,
+    keys: Keymap,
     /// Multi-selection (⌘A / Shift+↑↓), by clip id.
     marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
@@ -277,6 +279,7 @@ impl Picker {
             view_height: 0.0,
             thumbs: RefCell::default(),
             marked: HashSet::new(),
+            keys: Keymap::load(),
         }
     }
 
@@ -367,10 +370,11 @@ impl Picker {
     }
 
     fn show(&mut self, ctx: &egui::Context) {
+        self.keys = Keymap::load(); // pick up edits to keys.conf
         self.query.clear();
         self.marked.clear();
         self.selected = 0;
-        self.status = None;
+        self.status = self.keys.errors.first().cloned();
         self.was_focused = false;
         self.reload();
         self.visible = true;
@@ -473,17 +477,10 @@ impl Picker {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        let cmd = Modifiers::COMMAND;
-        let mut action = None;
+        let mut actions = Vec::new();
         let mut quick = None;
-        let mut edit = None;
         ctx.input_mut(|i| {
-            if i.consume_key(Modifiers::NONE, Key::Escape) {
-                action = Some(if self.marked.is_empty() { "CLOSE" } else { "UNMARK" });
-            }
-            if i.consume_key(cmd, Key::A) {
-                action = Some("MARK_ALL");
-            }
+            actions = self.keys.take_actions(i);
             // Shift+↑/↓ extends the multi-selection (checked before plain arrows).
             for (key, delta) in [(Key::ArrowDown, 1), (Key::ArrowUp, -1)] {
                 if i.consume_key(Modifiers::SHIFT, key) {
@@ -506,37 +503,18 @@ impl Picker {
                     self.move_selection(delta);
                 }
             }
-            if i.consume_key(Modifiers::SHIFT, Key::Tab) || i.consume_key(Modifiers::NONE, Key::Tab) {
-                action = Some("TAB");
-            }
-            // ⌘C / Ctrl+C copies the selected clip (egui reports it as a Copy
-            // event, not a key press).
-            if i.events.iter().any(|e| matches!(e, egui::Event::Copy)) {
-                i.events.retain(|e| !matches!(e, egui::Event::Copy));
-                action = Some("COPY");
-            }
-            // Order matters: modified Enter first.
-            if i.consume_key(cmd, Key::Enter) {
-                action = Some("TYPE");
-            } else if i.consume_key(Modifiers::SHIFT, Key::Enter) {
-                action = Some("COPY");
-            } else if i.consume_key(Modifiers::NONE, Key::Enter) {
-                action = Some("PASTE");
-            }
-            if i.consume_key(cmd, Key::P) {
-                edit = Some('p');
-            } else if i.consume_key(cmd, Key::S) {
-                edit = Some('s');
-            } else if i.consume_key(cmd, Key::D) {
-                edit = Some('d');
-            }
+            // Plain Tab would move keyboard focus out of the search field.
+            i.consume_key(Modifiers::NONE, Key::Tab);
+            i.consume_key(Modifiers::SHIFT, Key::Tab);
             let digits = [
                 Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5,
                 Key::Num6, Key::Num7, Key::Num8, Key::Num9,
             ];
-            for (n, key) in digits.into_iter().enumerate() {
-                if i.consume_key(cmd, key) {
-                    quick = Some(n);
+            if self.keys.quick != Modifiers::NONE {
+                for (n, key) in digits.into_iter().enumerate() {
+                    if i.consume_key(self.keys.quick, key) {
+                        quick = Some(n);
+                    }
                 }
             }
         });
@@ -544,30 +522,46 @@ impl Picker {
         if let Some(n) = quick {
             if n < self.filtered.len() {
                 self.selected = n;
-                action = Some("PASTE");
+                self.marked.clear();
+                actions.push(Action::Paste);
             }
         }
-        if edit.is_some() {
-            self.status = None;
-        }
-        match edit {
-            Some('p') => self.edit_current(|db, c| db.set_pinned(c.id, !c.pinned)),
-            Some('s') => self.edit_current(|db, c| db.set_saved(c.id, !c.saved)),
-            Some('d') if !self.marked.is_empty() => self.delete_marked(),
-            Some('d') => self.edit_current(|db, c| db.delete(c.id)),
-            _ => {}
-        }
-        match action {
-            Some("CLOSE") => self.close(ctx, true),
-            Some("UNMARK") => self.marked.clear(),
-            Some("MARK_ALL") => {
-                let all: HashSet<i64> = self.filtered.iter().map(|&i| self.items[i].clip.id).collect();
-                self.marked = if self.marked == all { HashSet::new() } else { all };
+        for action in actions {
+            if matches!(action, Action::Save | Action::Pin | Action::Delete) {
+                self.status = None;
             }
-            Some("TAB") => self.switch_tab(),
-            Some(a) => self.choose(ctx, a),
-            None => {}
+            match action {
+                Action::Paste => self.choose(ctx, "PASTE"),
+                Action::Copy => self.choose(ctx, "COPY"),
+                Action::Type => self.choose(ctx, "TYPE"),
+                Action::Pin => self.edit_current(|db, c| db.set_pinned(c.id, !c.pinned)),
+                Action::Save => self.edit_current(|db, c| db.set_saved(c.id, !c.saved)),
+                Action::Delete if !self.marked.is_empty() => self.delete_marked(),
+                Action::Delete => self.edit_current(|db, c| db.delete(c.id)),
+                Action::SelectAll => {
+                    let all: HashSet<i64> = self.filtered.iter().map(|&i| self.items[i].clip.id).collect();
+                    self.marked = if self.marked == all { HashSet::new() } else { all };
+                }
+                Action::NextTab | Action::PrevTab => self.switch_tab(),
+                Action::Close if !self.marked.is_empty() => self.marked.clear(),
+                Action::Close => self.close(ctx, true),
+                Action::Settings => self.open_settings(),
+            }
         }
+    }
+
+    /// Opens keys.conf in the default text editor.
+    fn open_settings(&mut self) {
+        let path = keys::ensure_config();
+        let result = if cfg!(target_os = "macos") {
+            std::process::Command::new("open").arg("-t").arg(&path).spawn()
+        } else {
+            std::process::Command::new("xdg-open").arg(&path).spawn()
+        };
+        self.status = Some(match result {
+            Ok(_) => format!("Editing {} — changes apply next time clipr opens", path.display()),
+            Err(e) => format!("Couldn't open {}: {e}", path.display()),
+        });
     }
 
     /// Search field with a magnifier glyph, plus a History/Saved segmented control.
@@ -655,7 +649,8 @@ impl Picker {
 
         let font = FontId::proportional(14.0);
         let small = FontId::proportional(12.0);
-        let cmd = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+        let cmd = keys::format_mods(self.keys.quick);
+        let show_quick = self.keys.quick != Modifiers::NONE;
         let mut clicked = None;
         let mut double_clicked = false;
 
@@ -678,7 +673,7 @@ impl Picker {
 
                 // Right side: marks and the ⌘N shortcut, like Maccy.
                 let mut x = rect.right() - 10.0;
-                if row < 9 {
+                if row < 9 && show_quick {
                     let g = painter.text(
                         pos2(x, rect.center().y),
                         Align2::RIGHT_CENTER,
@@ -746,7 +741,7 @@ impl Picker {
         }
         if self.filtered.is_empty() {
             let msg = match (self.tab, self.query.is_empty()) {
-                (Tab::Saved, true) => "No saved clips yet — select one and press ⌘S / Ctrl+S",
+                (Tab::Saved, true) => "No saved clips yet — select one and press ⌘S / Ctrl+S (Save)",
                 (Tab::History, true) => "Copy something to start your history",
                 _ => "No matches",
             };
@@ -788,17 +783,35 @@ impl Picker {
     }
 
     fn footer(&self, ui: &mut egui::Ui, t: &Theme) {
-        let m = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+        let hint = |actions: &[(Action, &str)]| {
+            actions
+                .iter()
+                .filter_map(|(a, name)| self.keys.label(*a).map(|k| format!("{k} {name}")))
+                .collect::<Vec<_>>()
+                .join("   ")
+        };
         let text = match &self.status {
             Some(s) => s.clone(),
             None if !self.marked.is_empty() => format!(
-                "{} selected    {m}D Delete (keeps pinned & saved)    {m}C Copy    ↩ Paste    Esc Cancel",
-                self.marked.len()
+                "{} selected   {}",
+                self.marked.len(),
+                hint(&[
+                    (Action::Delete, "Delete (keeps pinned & saved)"),
+                    (Action::Copy, "Copy"),
+                    (Action::Paste, "Paste"),
+                    (Action::Close, "Cancel"),
+                ])
             ),
-            None if cfg!(target_os = "macos") => {
-                "↩ Paste   ⌘↩ Type   ⌘C Copy   ⌘S Save   ⌘P Pin   ⌘D Delete   ⌘A Select all".into()
-            }
-            None => "Enter Paste  Ctrl+Enter Type  Ctrl+C Copy  Ctrl+S Save  Ctrl+P Pin  Ctrl+D Delete  Ctrl+A All".into(),
+            None => hint(&[
+                (Action::Paste, "Paste"),
+                (Action::Type, "Type"),
+                (Action::Copy, "Copy"),
+                (Action::Save, "Save"),
+                (Action::Pin, "Pin"),
+                (Action::Delete, "Delete"),
+                (Action::NextTab, "Tabs"),
+                (Action::Settings, "Keys"),
+            ]),
         };
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
         ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.border));

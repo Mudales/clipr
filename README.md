@@ -17,21 +17,34 @@ Uninstall: `curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/in
 
 ## Keys (in the picker)
 
+Defaults (⌘ on macOS, Ctrl on Linux). All of them can be changed, see below.
+
 | Key | Action |
 |---|---|
 | type | search |
 | ↑ ↓ PgUp PgDn | move |
-| Enter | paste into the previous app |
+| Enter, ⌘/Ctrl + V | paste into the app you were in |
 | ⌘/Ctrl + 1–9 | paste item 1–9 |
-| ⌘/Ctrl + C, or Shift + Enter | copy only (any clip, not just 1–9) |
-| ⌘/Ctrl + Enter | type it out (for fields that block paste) |
+| ⌘/Ctrl + C, Shift + Enter | copy only |
+| ⌘/Ctrl + Z | type it out as keystrokes (for fields that block paste) |
 | ⌘/Ctrl + S | save / unsave |
 | ⌘/Ctrl + P | pin / unpin (pinned stay at the top of History) |
-| ⌘/Ctrl + D | delete (with a multi-selection: deletes all selected except pinned & saved) |
-| ⌘/Ctrl + A | select all shown clips (again to unselect) — then ⌘/Ctrl+D clears the history |
+| Delete, ⌘/Ctrl + Backspace | delete (with a multi-selection: all selected except pinned & saved) |
+| ⌘/Ctrl + A | select all shown clips (again to unselect), then Delete clears the history |
 | Shift + ↑ ↓ | extend the selection; copy/paste then joins the selected clips line by line |
-| Tab | switch History ⇄ Saved |
+| Ctrl + Tab, Ctrl + Shift + Tab | switch History ⇄ Saved |
+| ⌘/Ctrl + , | edit the keyboard shortcuts |
 | Esc | clear the selection, or close |
+
+On a Mac keyboard the key labelled *delete* is Backspace, which also edits the search
+text, so deleting a clip is ⌘⌫ (or fn+⌫).
+
+### Changing the shortcuts
+
+Press ⌘/Ctrl + , in the picker, or edit `~/.config/clipr/keys.conf` (`clipr keys` prints
+the path). The file lists every action with its default; changes apply the next time the
+picker opens. The macOS global shortcut (`hotkey = Cmd+Shift+V`) applies after restarting
+clipr; on Linux the global shortcut lives in your Hyprland config.
 
 ## Build from source
 
@@ -73,7 +86,7 @@ o.bind("SUPER + SHIFT + V", "clipr clipboard history", os.getenv("HOME") .. "/.l
 -- ~/.config/hypr/autostart.lua
 o.launch_on_start(os.getenv("HOME") .. "/.local/bin/clipr")
 -- ~/.config/hypr/hyprland.lua (at the end)
-o.window("^(clipr)$", { float = true, center = true, stay_focused = true })
+o.window("^(clipr)$", { float = true, center = true, stay_focused = true, tag = "-default-opacity", opacity = "1.0 1.0" })
 ```
 
 **Older Hyprland (`hyprland.conf`):**

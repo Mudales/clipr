@@ -42,7 +42,7 @@ pub fn run() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         platform::accessibility_trusted(true); // ask once, up front
-        let _hotkey = platform::register_hotkey(toggle_popup)?;
+        let _hotkey = platform::register_hotkey(&crate::keys::Keymap::load().hotkey, toggle_popup)?;
         return crate::ui::run(crate::ui::Mode::Resident);
     }
 
