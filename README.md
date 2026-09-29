@@ -1,6 +1,6 @@
 # clipr
 
-Light, keyboard-driven clipboard history for macOS and Linux (Hyprland), written in Rust.
+Light, keyboard-driven clipboard history for macOS, Windows and Linux (Hyprland), written in Rust.
 
 - **History** of everything you copy: text and images (up to 1000 clips / 100 images, SQLite)
 - **Saved** tab for clips you use often (numbered in the order you saved them)
@@ -8,7 +8,9 @@ Light, keyboard-driven clipboard history for macOS and Linux (Hyprland), written
 - Paste straight into the app you were using, or **type it out** as keystrokes
 - Right-click menu, Maccy-style Settings page and editable shortcuts
 
-## Install (macOS & Linux, no Rust needed)
+## Install (no Rust needed)
+
+**macOS & Linux**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/install.sh | sh
@@ -16,9 +18,17 @@ curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/install.sh | s
 
 Uninstall: `curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/install.sh | sh -s -- --uninstall`
 
+**Windows** (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/Mudales/clipr/master/install.ps1 | iex
+```
+
+Uninstall: `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mudales/clipr/master/install.ps1))) -Uninstall`
+
 ## Keys (in the picker)
 
-Defaults (⌘ on macOS, Ctrl on Linux). All of them can be changed, see below.
+Defaults (⌘ on macOS, Ctrl on Windows and Linux). All of them can be changed, see below.
 
 | Key | Action |
 |---|---|
@@ -84,6 +94,17 @@ needs the permission re-granted (remove the old `clipr` entry first, or run
 - The first paste asks for **Accessibility** permission (System Settings → Privacy & Security → Accessibility) — needed to press ⌘V for you.
 - macOS may ask once about clipboard access — choose *Always Allow*.
 - Clips marked as secret by password managers are skipped.
+
+## Windows
+
+Installed to `%LOCALAPPDATA%\Programs\clipr` and started at login. Press **Win+Shift+V**
+(Win+V stays Windows' own clipboard history); change it under Settings → Keyboard
+shortcuts. History and settings live in `%APPDATA%\clipr`.
+
+- No permission prompt is needed to paste or type.
+- Windows doesn't let apps send keystrokes to programs running as administrator, so
+  clipr can't paste into those unless clipr also runs as administrator.
+- Copies that password managers mark as secret are skipped.
 
 ## Linux (Hyprland / Omarchy)
 

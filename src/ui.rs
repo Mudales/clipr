@@ -30,12 +30,13 @@ const PREVIEW_CHARS: usize = 160;
 const SEARCH_CHARS: usize = 4096;
 
 /// Preferred UI font (the macOS system font); egui's default is used otherwise.
-const UI_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf"];
+const UI_FONTS: &[&str] = &["/System/Library/Fonts/SFNS.ttf", "C:\\Windows\\Fonts\\segoeui.ttf"];
 
 /// Fonts tried (in order) as a fallback for Hebrew, Arabic, Cyrillic, etc.
 const FALLBACK_FONTS: &[&str] = &[
     "/System/Library/Fonts/SFHebrew.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "C:\\Windows\\Fonts\\arial.ttf",
     "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -43,12 +44,12 @@ const FALLBACK_FONTS: &[&str] = &[
 ];
 
 /// `OneShot`: a short-lived process that exits after picking (Linux).
-/// `Resident`: lives inside the daemon and is hidden/shown (macOS, where a
-/// freshly spawned process is not allowed to take focus).
+/// `Resident`: lives inside the daemon and is hidden/shown (macOS and Windows,
+/// where a freshly spawned process is not allowed to take focus).
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
     OneShot,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Resident,
 }
 
@@ -56,7 +57,7 @@ static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
 
 /// Show/hide the resident picker. Safe to call from any thread.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub fn request_toggle() {
     TOGGLE_REQUESTED.store(true, Ordering::SeqCst);
     if let Some(ctx) = CONTEXT.get() {
@@ -425,8 +426,10 @@ impl Picker {
         self.visible = true;
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Focus);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         crate::platform::activate_self();
+        #[cfg(windows)]
+        crate::platform::round_corners();
     }
 
     /// `restore_focus`: give focus back to the app that was active before
@@ -636,6 +639,8 @@ impl Picker {
     fn open_file(&mut self, path: std::path::PathBuf) {
         let result = if cfg!(target_os = "macos") {
             std::process::Command::new("open").arg("-t").arg(&path).spawn()
+        } else if cfg!(windows) {
+            std::process::Command::new("notepad.exe").arg(&path).spawn()
         } else {
             std::process::Command::new("xdg-open").arg(&path).spawn()
         };

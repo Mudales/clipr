@@ -43,8 +43,21 @@ jobs:
           name: linux
           path: clipr-linux-x86_64.tar.gz
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release
+      - run: cargo test --release
+      - run: Compress-Archive -Path target/release/clipr.exe -DestinationPath clipr-windows-x86_64.zip
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: clipr-windows-x86_64.zip
+
   publish:
-    needs: [macos, linux]
+    needs: [macos, linux, windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -56,4 +69,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --generate-notes \
-            clipr-macos-universal.zip clipr-linux-x86_64.tar.gz
+            clipr-macos-universal.zip clipr-linux-x86_64.tar.gz clipr-windows-x86_64.zip

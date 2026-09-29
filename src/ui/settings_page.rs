@@ -16,7 +16,7 @@ pub struct Draft {
     key_errors: Vec<Option<String>>,
     confirm_clear: bool,
     message: Option<String>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     login: bool,
 }
 
@@ -48,8 +48,15 @@ fn login_agent() -> std::path::PathBuf {
 fn login_item_enabled() -> bool {
     #[cfg(target_os = "macos")]
     return login_agent().exists();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    return crate::platform::login::enabled();
+    #[cfg(target_os = "linux")]
     false
+}
+
+#[cfg(windows)]
+fn set_login_item(on: bool) -> std::io::Result<()> {
+    crate::platform::login::set(on)
 }
 
 /// Start at login via a LaunchAgent (the same one install.sh creates).
@@ -150,7 +157,7 @@ impl Picker {
             ui.radio_value(&mut s.search_mode, SearchMode::Fuzzy, "Fuzzy");
             ui.radio_value(&mut s.search_mode, SearchMode::Exact, "Exact");
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             let mut on = self.page.login;
             if ui.checkbox(&mut on, "Open clipr at login").changed() {
@@ -160,7 +167,7 @@ impl Picker {
                 }
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         hint(ui, t, "Autostart and the global shortcut are set in your Hyprland config.");
     }
 
@@ -221,6 +228,8 @@ impl Picker {
             t,
             if cfg!(target_os = "macos") {
                 "App name or bundle id, e.g. 1Password or com.bitwarden.desktop"
+            } else if cfg!(windows) {
+                "Program name, e.g. 1Password or KeePass.exe"
             } else {
                 "Window class, e.g. Bitwarden (see `hyprctl activewindow`)"
             },
@@ -246,11 +255,11 @@ impl Picker {
 
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Theme) {
         section(ui, t, "KEYBOARD SHORTCUTS");
-        hint(ui, t, "Mod = ⌘ on macOS, Ctrl on Linux. Several shortcuts: separate with commas.");
+        hint(ui, t, "Mod = ⌘ on macOS, Ctrl on Windows/Linux. Several shortcuts: separate with commas.");
         let mut changed = false;
         egui::Grid::new("shortcuts").num_columns(2).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
             for (i, (name, label)) in keys::EDITABLE.iter().enumerate() {
-                if *name == "hotkey" && !cfg!(target_os = "macos") {
+                if *name == "hotkey" && cfg!(target_os = "linux") {
                     continue;
                 }
                 ui.label(*label);

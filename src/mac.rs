@@ -10,8 +10,6 @@ use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode}
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSPasteboard, NSRunningApplication, NSWorkspace,
 };
@@ -114,9 +112,15 @@ pub fn should_skip_current() -> bool {
     types.iter().any(|t| SKIP_TYPES.contains(&t.to_string().as_str()))
 }
 
-pub fn frontmost_pid() -> Option<i32> {
+/// The app in front (its pid), to paste back into after the picker closes.
+pub fn frontmost_app() -> Option<isize> {
     let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
-    Some(app.processIdentifier())
+    Some(app.processIdentifier() as isize)
+}
+
+/// Whether `handle` (from `frontmost_app`) is this process.
+pub fn is_own(handle: isize) -> bool {
+    handle == std::process::id() as isize
 }
 
 /// Name and bundle id of the app in front (for Settings → Ignore apps).
@@ -129,8 +133,8 @@ pub fn frontmost_app_names() -> Vec<String> {
         .collect()
 }
 
-pub fn activate(pid: i32) {
-    if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+pub fn activate(pid: isize) {
+    if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32) {
         #[allow(deprecated)]
         app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
     }
@@ -144,27 +148,4 @@ pub fn activate_self() {
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
     }
-}
-
-/// Registers the global shortcut from keys.conf (default Cmd+Shift+V). Must be
-/// called on the main thread before the event loop starts; keep the returned
-/// manager alive.
-pub fn register_hotkey(spec: &str, on_hotkey: impl Fn() + Send + Sync + 'static) -> Result<GlobalHotKeyManager> {
-    let manager = GlobalHotKeyManager::new()?;
-    let normalized = spec.replace("Mod", "Cmd").replace("mod", "Cmd");
-    let hotkey = match normalized.parse::<HotKey>() {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("clipr: bad hotkey {spec:?} in keys.conf ({e}), using Cmd+Shift+V");
-            HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyV)
-        }
-    };
-    manager.register(hotkey)?;
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state == HotKeyState::Pressed {
-            on_hotkey();
-        }
-    }));
-    eprintln!("clipr: hotkey {spec}");
-    Ok(manager)
 }

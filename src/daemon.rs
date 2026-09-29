@@ -5,9 +5,6 @@ use crate::db::{Db, Payload};
 use crate::settings::Settings;
 use crate::{ipc, platform};
 use anyhow::{Context, Result, bail};
-use std::io::{BufRead, BufReader};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
 use std::process::Child;
 use std::sync::Mutex;
 use std::thread;
@@ -17,9 +14,10 @@ const POLL: Duration = Duration::from_millis(250);
 
 struct Popup {
     child: Option<Child>,
-    /// App that was focused before the popup opened, so we can paste into it.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    prev_app: Option<i32>,
+    /// App (macOS pid / Windows window) focused before the popup opened, so
+    /// we can paste into it.
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+    prev_app: Option<isize>,
 }
 
 static POPUP: Mutex<Popup> = Mutex::new(Popup { child: None, prev_app: None });
@@ -30,24 +28,22 @@ pub fn run() -> Result<()> {
     }
     // Create the schema once up front so the threads below don't race on it.
     drop(Db::open()?);
-    let path = ipc::socket_path();
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    eprintln!("clipr: listening on {}", path.display());
+    let listener = ipc::listen()?;
 
     thread::spawn(|| log_err("watcher", watch_clipboard()));
     thread::spawn(move || log_err("server", serve(listener)));
 
-    // On macOS the picker lives in this process (hidden until the hotkey).
-    #[cfg(target_os = "macos")]
+    // On macOS and Windows the picker lives in this process (hidden until the
+    // hotkey): a freshly started process isn't allowed to take focus there.
+    #[cfg(any(target_os = "macos", windows))]
     {
+        #[cfg(target_os = "macos")]
         platform::accessibility_trusted(true); // ask once, up front
-        let _hotkey = platform::register_hotkey(&crate::keys::Keymap::load().hotkey, toggle_popup)?;
+        let _hotkey = crate::hotkey::register_hotkey(&crate::keys::Keymap::load().hotkey, toggle_popup)?;
         return crate::ui::run(crate::ui::Mode::Resident);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     loop {
         thread::park();
     }
@@ -59,7 +55,9 @@ fn log_err(what: &str, r: Result<()>) {
     }
 }
 
-#[cfg(target_os = "macos")]
+/// macOS and Windows expose a cheap change counter, so the clipboard is only
+/// read when something was actually copied (and re-copies are seen too).
+#[cfg(any(target_os = "macos", windows))]
 fn watch_clipboard() -> Result<()> {
     let mut db = Db::open()?;
     let mut clipboard = arboard::Clipboard::new()?;
@@ -67,8 +65,6 @@ fn watch_clipboard() -> Result<()> {
 
     loop {
         thread::sleep(POLL);
-        // macOS exposes a change counter, so we only read the contents when
-        // something was actually copied (and can see re-copies of the same text).
         let count = platform::change_count();
         if count == last_count {
             continue;
@@ -98,7 +94,7 @@ fn watch_clipboard() -> Result<()> {
 /// On Wayland, `wl-paste --watch` runs `clipr store` on every copy — no
 /// polling, and it flags password-manager copies as sensitive. Falls back to
 /// polling text (X11, or no wl-clipboard installed).
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn watch_clipboard() -> Result<()> {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() && platform::spawn_wl_watchers() {
         loop {
@@ -156,17 +152,10 @@ pub fn store_from_stdin() -> Result<()> {
     }
 }
 
-fn serve(listener: UnixListener) -> Result<()> {
+fn serve(listener: ipc::Listener) -> Result<()> {
     let db = Db::open()?;
     let mut clipboard = arboard::Clipboard::new()?;
-    for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
-        let mut line = String::new();
-        if BufReader::new(stream).read_line(&mut line).is_err() {
-            continue;
-        }
-        log_err("command", handle(line.trim(), &db, &mut clipboard));
-    }
+    listener.serve(|line| log_err("command", handle(line, &db, &mut clipboard)));
     Ok(())
 }
 
@@ -221,26 +210,27 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
 }
 
 /// Opens the picker, or closes it if it is already open.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn toggle_popup() {
     let mut popup = POPUP.lock().unwrap();
-    let front = platform::frontmost_pid();
-    if front.is_some() && front != Some(std::process::id() as i32) {
-        popup.prev_app = front;
+    if let Some(front) = platform::frontmost_app() {
+        if !platform::is_own(front) {
+            popup.prev_app = Some(front);
+        }
     }
     crate::ui::request_toggle();
 }
 
 /// Gives focus back to the app that was active before the picker opened.
 pub fn restore_focus() {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     if let Some(pid) = POPUP.lock().unwrap().prev_app {
         platform::activate(pid);
     }
 }
 
 /// Opens the picker, or closes it if it is already open.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn toggle_popup() {
     let mut popup = POPUP.lock().unwrap();
     if let Some(child) = popup.child.as_mut() {

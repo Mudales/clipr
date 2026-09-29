@@ -1,5 +1,10 @@
+// No console window when started normally on Windows (see `main`).
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod daemon;
 mod db;
+#[cfg(any(target_os = "macos", windows))]
+mod hotkey;
 mod images;
 mod ipc;
 mod keys;
@@ -10,11 +15,15 @@ mod ui;
 mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(target_os = "linux")]
 use linux as platform;
 #[cfg(target_os = "macos")]
 use mac as platform;
+#[cfg(windows)]
+use windows as platform;
 
 use anyhow::{Result, bail};
 use std::process::{Command, ExitCode, Stdio};
@@ -33,6 +42,13 @@ USAGE:
 ";
 
 fn main() -> ExitCode {
+    // As a GUI app on Windows we have no console; borrow the terminal's when
+    // started from one, so `clipr --version` etc. still print.
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
     let result = match std::env::args().nth(1).as_deref() {
         None | Some("daemon") => daemon::run(),
         Some("toggle") => toggle(),

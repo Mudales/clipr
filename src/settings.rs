@@ -50,7 +50,7 @@ impl Default for Settings {
             paste_automatically: true,
             // Hyprland moves focus with the mouse, so closing on focus loss
             // would close the picker when the pointer merely leaves it.
-            close_on_click_away: cfg!(target_os = "macos"),
+            close_on_click_away: !cfg!(target_os = "linux"),
             theme: ThemeChoice::System,
             show_preview: true,
             show_numbers: true,

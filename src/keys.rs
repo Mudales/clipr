@@ -36,7 +36,8 @@ const ACTIONS: &[(&str, Action)] = &[
 const DEFAULTS: &str = "\
 # clipr keyboard shortcuts — edit and save; they apply the next time the picker opens.
 #
-# Mod = ⌘ on macOS, Ctrl on Linux. Other modifiers: Ctrl, Shift, Alt (Opt), Cmd.
+# Mod = ⌘ on macOS, Ctrl on Windows/Linux. Other modifiers: Ctrl, Shift, Alt (Opt),
+# Cmd (= the Windows key on Windows).
 # Several shortcuts per action are separated by commas; leave empty to disable.
 # Key names: A-Z, 0-9, Enter, Tab, Space, Escape, Delete, Backspace, Comma,
 # ArrowUp/Down/Left/Right, PageUp/PageDown, Home, End, F1-F12.
@@ -58,7 +59,8 @@ settings   = Mod+Comma
 # Modifier for pasting item 1-9 directly (e.g. Mod+1).
 quick_paste = Mod
 
-# macOS only: the global shortcut that opens clipr (restart clipr after changing).
+# macOS / Windows: the global shortcut that opens clipr (restart clipr after
+# changing). Cmd+Shift+V is ⌘⇧V on macOS and Win+Shift+V on Windows.
 # On Linux, set the shortcut in your Hyprland config instead.
 hotkey = Cmd+Shift+V
 ";
@@ -72,7 +74,7 @@ pub struct Shortcut {
 pub struct Keymap {
     bindings: Vec<(Action, Shortcut)>,
     pub quick: Modifiers,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub hotkey: String,
     /// Problems found in keys.conf, shown in the picker's status line.
     pub errors: Vec<String>,
@@ -97,7 +99,7 @@ pub const EDITABLE: &[(&str, &str)] = &[
     ("close", "Close"),
     ("settings", "Settings"),
     ("quick_paste", "Paste 1–9 modifier"),
-    ("hotkey", "Open clipr (macOS, needs restart)"),
+    ("hotkey", "Open clipr (global, needs restart)"),
 ];
 
 /// Checks one setting's text; `Err` has a message for the user.
@@ -144,9 +146,14 @@ pub fn save(values: &[(String, String)]) -> std::io::Result<()> {
 }
 
 pub fn config_path() -> PathBuf {
+    // Windows: %APPDATA%\clipr, next to the history database.
+    #[cfg(windows)]
+    return crate::db::data_dir().join("keys.conf");
+    #[cfg(not(windows))]
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"));
+    #[cfg(not(windows))]
     base.join("clipr").join("keys.conf")
 }
 
