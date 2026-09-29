@@ -79,6 +79,8 @@ uninstall_macos() {
 
 # ---------------------------------------------------------------- Linux
 LINUX_BIN="$HOME/.local/bin/clipr"
+LINUX_DESKTOP="$HOME/.local/share/applications/clipr.desktop"
+LINUX_ICON="$HOME/.local/share/icons/hicolor/scalable/apps/clipr.svg"
 
 install_linux() {
     case "$(uname -m)" in
@@ -101,6 +103,7 @@ install_linux() {
         fi
     fi
 
+    install_launcher_entry
     nohup "$LINUX_BIN" >/dev/null 2>&1 &
     command -v wl-paste >/dev/null 2>&1 || say "Tip: install 'wl-clipboard' for image history and instant capture"
 
@@ -138,9 +141,47 @@ EOF
     fi
 }
 
+# Makes clipr show up in app launchers (Omarchy's SUPER+SPACE, rofi, walker…).
+install_launcher_entry() {
+    mkdir -p "$(dirname "$LINUX_DESKTOP")" "$(dirname "$LINUX_ICON")"
+    cat > "$LINUX_ICON" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f7df6"/>
+      <stop offset="1" stop-color="#0a55cc"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#bg)"/>
+  <!-- clipboard board -->
+  <rect x="70" y="58" width="116" height="146" rx="16" fill="#ffffff"/>
+  <!-- clip -->
+  <rect x="98" y="44" width="60" height="30" rx="10" fill="#dbe7fb" stroke="#0a55cc" stroke-width="6"/>
+  <!-- history lines -->
+  <rect x="90" y="96" width="76" height="12" rx="6" fill="#2f7df6"/>
+  <rect x="90" y="124" width="60" height="12" rx="6" fill="#9dbdf2"/>
+  <rect x="90" y="152" width="68" height="12" rx="6" fill="#9dbdf2"/>
+</svg>
+SVG
+    cat > "$LINUX_DESKTOP" <<EOF
+[Desktop Entry]
+Type=Application
+Name=clipr
+GenericName=Clipboard history
+Comment=Search and paste your clipboard history
+Exec=$LINUX_BIN toggle
+Icon=clipr
+Terminal=false
+Categories=Utility;
+Keywords=clipboard;history;paste;copy;
+StartupNotify=false
+EOF
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$(dirname "$LINUX_DESKTOP")" || true
+}
+
 uninstall_linux() {
     pkill -x clipr 2>/dev/null || true
-    rm -f "$LINUX_BIN"
+    rm -f "$LINUX_BIN" "$LINUX_DESKTOP" "$LINUX_ICON"
     say "Removed clipr (history kept in ~/.local/share/clipr). Remove the lines from your Hyprland config."
 }
 
