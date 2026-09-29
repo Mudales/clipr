@@ -1,7 +1,7 @@
 //! The background process: records clipboard history, owns the clipboard when
 //! pasting, launches the picker popup and sends the paste keystroke.
 
-use crate::db::Db;
+use crate::db::{Db, Payload};
 use crate::{ipc, platform};
 use anyhow::{Context, Result, bail};
 use std::io::{BufRead, BufReader};
@@ -58,41 +58,73 @@ fn log_err(what: &str, r: Result<()>) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn watch_clipboard() -> Result<()> {
     let db = Db::open()?;
     let mut clipboard = arboard::Clipboard::new()?;
-    #[cfg(not(target_os = "macos"))]
-    let mut last: Option<String> = None;
-    #[cfg(target_os = "macos")]
     let mut last_count = platform::change_count() - 1;
 
     loop {
         thread::sleep(POLL);
-
         // macOS exposes a change counter, so we only read the contents when
         // something was actually copied (and can see re-copies of the same text).
-        #[cfg(target_os = "macos")]
-        {
-            let count = platform::change_count();
-            if count == last_count {
-                continue;
-            }
-            last_count = count;
-            if platform::should_skip_current() {
-                continue;
-            }
-            if let Ok(text) = clipboard.get_text() {
-                log_err("db", db.add(&text));
-            }
+        let count = platform::change_count();
+        if count == last_count {
+            continue;
         }
+        last_count = count;
+        if platform::should_skip_current() {
+            continue;
+        }
+        if let Ok(text) = clipboard.get_text() {
+            log_err("db", db.add(&text));
+        } else if let Ok(img) = clipboard.get_image() {
+            let stored = crate::images::from_rgba(img.width as u32, img.height as u32, img.bytes.into_owned());
+            log_err("image", stored.and_then(|s| db.add_image(&s)));
+        }
+    }
+}
 
-        #[cfg(not(target_os = "macos"))]
+/// On Wayland, `wl-paste --watch` runs `clipr store` on every copy — no
+/// polling, and it flags password-manager copies as sensitive. Falls back to
+/// polling text (X11, or no wl-clipboard installed).
+#[cfg(not(target_os = "macos"))]
+fn watch_clipboard() -> Result<()> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() && platform::spawn_wl_watchers() {
+        loop {
+            thread::park();
+        }
+    }
+    let db = Db::open()?;
+    let mut clipboard = arboard::Clipboard::new()?;
+    let mut last: Option<String> = None;
+    loop {
+        thread::sleep(POLL);
         if let Ok(text) = clipboard.get_text() {
             if last.as_deref() != Some(text.as_str()) {
                 log_err("db", db.add(&text));
                 last = Some(text);
             }
         }
+    }
+}
+
+/// `clipr store`: saves the clipboard contents given on stdin (run by `wl-paste --watch`).
+pub fn store_from_stdin() -> Result<()> {
+    use std::io::Read;
+    // wl-paste sets this; "sensitive" = marked secret by a password manager.
+    if matches!(std::env::var("CLIPBOARD_STATE").as_deref(), Ok("sensitive" | "clear")) {
+        return Ok(());
+    }
+    let mut data = Vec::new();
+    std::io::stdin().take((crate::images::MAX_IMAGE_BYTES + 1) as u64).read_to_end(&mut data)?;
+    let db = Db::open()?;
+    if crate::images::looks_like_image(&data) {
+        db.add_image(&crate::images::from_encoded(&data)?)
+    } else if let Ok(text) = String::from_utf8(data) {
+        db.add(&text)
+    } else {
+        Ok(())
     }
 }
 
@@ -120,22 +152,24 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
         return Ok(());
     }
     let id: i64 = arg.parse().with_context(|| format!("bad command {line:?}"))?;
-    let Some(text) = db.get(id)? else { return Ok(()) };
-    db.add(&text)?; // move to top of history
+    let Some(payload) = db.payload(id)? else { return Ok(()) };
+    db.touch(id)?; // move to top of history
 
-    match cmd {
-        "COPY" => {
-            clipboard.set_text(&text)?;
-            wait_for_popup_exit();
-        }
-        "PASTE" => {
-            clipboard.set_text(&text)?;
-            wait_for_popup_exit();
-            platform::send_paste()?;
-        }
-        "TYPE" => {
+    match (cmd, payload) {
+        ("TYPE", Payload::Text(text)) => {
             wait_for_popup_exit();
             platform::type_text(&text)?;
+        }
+        (cmd @ ("COPY" | "PASTE" | "TYPE"), payload) => {
+            match payload {
+                Payload::Text(text) => clipboard.set_text(&text)?,
+                Payload::Image(png) => clipboard.set_image(crate::images::decode(&png)?)?,
+            }
+            wait_for_popup_exit();
+            // Images can't be typed, so "type" pastes them.
+            if cmd != "COPY" {
+                platform::send_paste()?;
+            }
         }
         _ => bail!("unknown command {cmd:?}"),
     }

@@ -1,5 +1,6 @@
 mod daemon;
 mod db;
+mod images;
 mod ipc;
 mod ui;
 
@@ -23,6 +24,7 @@ USAGE:
     clipr            run the background daemon (records history, global hotkey on macOS)
     clipr toggle     open/close the picker (starts the daemon if needed) — bind this to a key
     clipr pick       open the picker directly
+    clipr store      save clipboard data from stdin (used by `wl-paste --watch`)
     clipr --version  print the version
 ";
 
@@ -31,6 +33,7 @@ fn main() -> ExitCode {
         None | Some("daemon") => daemon::run(),
         Some("toggle") => toggle(),
         Some("pick") => ui::run(ui::Mode::OneShot),
+        Some("store") => daemon::store_from_stdin(),
         Some("-V" | "--version") => {
             println!("clipr {}", env!("CARGO_PKG_VERSION"));
             Ok(())

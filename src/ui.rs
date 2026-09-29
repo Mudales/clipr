@@ -1,6 +1,9 @@
 //! The picker popup: fuzzy search over history / saved clips, fully keyboard driven.
 
 use crate::db::{Clip, Db};
+use crate::images::parse_key;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use crate::ipc;
 use anyhow::{Result, anyhow};
 use eframe::egui::{
@@ -63,6 +66,8 @@ enum Tab {
 struct Item {
     clip: Clip,
     preview: String,
+    /// Pixel size, for image clips.
+    image: Option<(u32, u32)>,
     /// Starts with Hebrew/Arabic: right-align so the beginning stays visible.
     rtl: bool,
 }
@@ -83,6 +88,8 @@ struct Picker {
     scroll_to_selected: bool,
     scroll_offset: f32,
     view_height: f32,
+    /// Decoded thumbnails by clip id (`None` = failed to load).
+    thumbs: RefCell<HashMap<i64, Option<egui::TextureHandle>>>,
 }
 
 pub fn run(mode: Mode) -> Result<()> {
@@ -214,6 +221,12 @@ fn visual_order(s: &str) -> String {
     out
 }
 
+/// Largest rect with `size`'s aspect ratio that fits centered in `bounds`.
+fn fit_rect(size: egui::Vec2, bounds: egui::Rect) -> egui::Rect {
+    let scale = (bounds.width() / size.x).min(bounds.height() / size.y);
+    egui::Rect::from_center_size(bounds.center(), size * scale)
+}
+
 fn starts_rtl(s: &str) -> bool {
     s.chars().find(|c| c.is_alphabetic()).is_some_and(is_rtl)
 }
@@ -260,7 +273,22 @@ impl Picker {
             scroll_to_selected: true,
             scroll_offset: 0.0,
             view_height: 0.0,
+            thumbs: RefCell::default(),
         }
+    }
+
+    fn thumb(&self, ctx: &egui::Context, id: i64) -> Option<egui::TextureHandle> {
+        self.thumbs
+            .borrow_mut()
+            .entry(id)
+            .or_insert_with(|| {
+                let png = self.db.thumb(id).ok().flatten()?;
+                let img = image::load_from_memory(&png).ok()?.into_rgba8();
+                let size = [img.width() as usize, img.height() as usize];
+                let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+                Some(ctx.load_texture(format!("thumb{id}"), color, egui::TextureOptions::LINEAR))
+            })
+            .clone()
     }
 
     fn reload(&mut self) {
@@ -273,7 +301,11 @@ impl Picker {
                 self.items = clips
                     .into_iter()
                     .map(|clip| Item {
-                        preview: preview(&clip.content),
+                        image: clip.is_image.then(|| parse_key(&clip.content)).flatten(),
+                        preview: match parse_key(&clip.content) {
+                            Some((w, h)) if clip.is_image => format!("Image  {w} × {h}"),
+                            _ => preview(&clip.content),
+                        },
                         rtl: starts_rtl(&clip.content),
                         clip,
                     })
@@ -571,7 +603,19 @@ impl Picker {
                     }
                 }
 
-                let text_rect = rect.with_min_x(rect.left() + 10.0).with_max_x(x - 4.0);
+                let mut text_left = rect.left() + 10.0;
+                if item.image.is_some() {
+                    if let Some(tex) = self.thumb(ctx, item.clip.id) {
+                        let box_ = egui::Rect::from_min_size(
+                            pos2(text_left, rect.center().y - 10.0),
+                            vec2(36.0, 20.0),
+                        );
+                        let fit = fit_rect(tex.size_vec2(), box_);
+                        painter.image(tex.id(), fit, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    }
+                    text_left += 44.0;
+                }
+                let text_rect = rect.with_min_x(text_left).with_max_x(x - 4.0);
                 let (anchor, align) = if item.rtl {
                     (text_rect.right_center(), Align2::RIGHT_CENTER)
                 } else {
@@ -594,6 +638,7 @@ impl Picker {
         });
         self.scroll_offset = out.state.offset.y;
         self.view_height = out.inner_rect.height();
+        self.image_preview(ui, ctx, t, out.inner_rect);
 
         if let Some(row) = clicked {
             self.selected = row;
@@ -615,6 +660,33 @@ impl Picker {
                 t.muted,
             );
         }
+    }
+
+    /// Larger preview of the selected image, in the half of the list away
+    /// from the selected row so it doesn't cover it.
+    fn image_preview(&self, ui: &egui::Ui, ctx: &egui::Context, t: &Theme, list: egui::Rect) {
+        let Some(&idx) = self.filtered.get(self.selected) else { return };
+        let item = &self.items[idx];
+        if item.image.is_none() {
+            return;
+        }
+        let Some(tex) = self.thumb(ctx, item.clip.id) else { return };
+        let row_y = list.top() + self.selected as f32 * ROW_H - self.scroll_offset;
+        let size = vec2(list.width() * 0.6, list.height() * 0.45);
+        let min = if row_y > list.center().y {
+            pos2(list.right() - size.x - 8.0, list.top() + 8.0)
+        } else {
+            pos2(list.right() - size.x - 8.0, list.bottom() - size.y - 8.0)
+        };
+        let panel = egui::Rect::from_min_size(min, size);
+        // Own layer, so it's drawn above the list rows.
+        let painter = ctx
+            .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("image_preview")))
+            .with_clip_rect(ui.clip_rect());
+        painter.rect_filled(panel.expand(1.0), 10.0, t.border);
+        painter.rect_filled(panel, 10.0, t.bg.to_opaque());
+        let fit = fit_rect(tex.size_vec2(), panel.shrink(8.0));
+        painter.image(tex.id(), fit, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 
     fn footer(&self, ui: &mut egui::Ui, t: &Theme) {

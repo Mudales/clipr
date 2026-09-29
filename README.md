@@ -2,7 +2,7 @@
 
 Light, keyboard-driven clipboard history for macOS and Linux (Hyprland), written in Rust.
 
-- **History** of everything you copy (text, up to 1000 clips, stored in SQLite)
+- **History** of everything you copy: text and images (up to 1000 clips / 100 images, SQLite)
 - **Saved** tab for clips you use often (numbered in the order you saved them)
 - Fuzzy search as you type
 - Paste straight into the app you were using, or **type it out** as keystrokes
@@ -59,28 +59,32 @@ needs the permission re-granted (remove the old `clipr` entry first, or run
 
 ## Linux (Hyprland / Omarchy)
 
-```sh
-sudo pacman -S --needed rustup base-devel wtype   # wtype sends the paste keystroke
-rustup default stable
-git clone https://github.com/Mudales/clipr && cd clipr
-cargo install --path .                             # installs ~/.cargo/bin/clipr
+Use the one-line installer above. It installs `~/.local/bin/clipr` (and `wtype`, which
+sends the paste keystroke) and prints the lines to add to your Hyprland config.
+`wl-clipboard` is used for instant capture and image history.
+
+**Hyprland 0.56+ / Omarchy (Lua config; `hyprland.conf` is ignored):**
+
+```lua
+-- ~/.config/hypr/bindings.lua
+o.bind("SUPER + SHIFT + V", "clipr clipboard history", os.getenv("HOME") .. "/.local/bin/clipr toggle")
+-- ~/.config/hypr/autostart.lua
+o.launch_on_start(os.getenv("HOME") .. "/.local/bin/clipr")
+-- ~/.config/hypr/hyprland.lua (at the end)
+o.window("^(clipr)$", { float = true, center = true })
 ```
 
-Add to `~/.config/hypr/hyprland.conf` (on Omarchy: `~/.config/hypr/bindings.conf` for the bind,
-and check `SUPER SHIFT V` isn't already used):
+**Older Hyprland (`hyprland.conf`):**
 
 ```
-exec-once = ~/.cargo/bin/clipr
-bind = SUPER SHIFT, V, exec, ~/.cargo/bin/clipr toggle
+exec-once = ~/.local/bin/clipr
+bind = SUPER SHIFT, V, exec, ~/.local/bin/clipr toggle
 windowrule = float, class:^(clipr)$
 windowrule = center, class:^(clipr)$
 ```
 
-Then `hyprctl reload` and start it once by hand: `~/.cargo/bin/clipr &`.
-(The window-rule syntax changed across Hyprland versions — adjust if `hyprctl reload` complains.)
-
-Terminals (Alacritty, Ghostty, kitty, …) automatically get Ctrl+Shift+V instead of Ctrl+V.
-Debug by running `~/.cargo/bin/clipr` in a terminal and watching its output.
+Then `hyprctl reload`. Terminals (Alacritty, Ghostty, kitty, ...) automatically get
+Ctrl+Shift+V instead of Ctrl+V. Debug by running `~/.local/bin/clipr` in a terminal.
 
 ## Releasing
 

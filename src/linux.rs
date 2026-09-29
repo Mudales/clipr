@@ -66,3 +66,28 @@ pub fn type_text(text: &str) -> Result<()> {
         run("xdotool", &["type", "--clearmodifiers", "--", text])
     }
 }
+
+/// Starts `wl-paste --watch clipr store` for text and for images. Returns false
+/// if wl-paste isn't available. The watchers die with the daemon.
+pub fn spawn_wl_watchers() -> bool {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe().unwrap_or_else(|_| "clipr".into());
+    let mut ok = true;
+    for kind in ["text", "image"] {
+        let mut cmd = Command::new("wl-paste");
+        cmd.args(["--type", kind, "--watch"]).arg(&exe).arg("store");
+        // SAFETY: prctl is async-signal-safe; only asks for SIGTERM when we exit.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+        if let Err(e) = cmd.spawn() {
+            eprintln!("clipr: wl-paste not usable ({e}), falling back to polling");
+            ok = false;
+            break;
+        }
+    }
+    ok
+}

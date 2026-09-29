@@ -5,15 +5,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Unpinned, unsaved clips beyond this count are dropped (oldest first).
 const HISTORY_LIMIT: i64 = 1000;
+/// Unpinned, unsaved images beyond this count are dropped (they are big).
+const IMAGE_LIMIT: i64 = 100;
 /// Clips larger than this are not stored.
 pub const MAX_CLIP_BYTES: usize = 1 << 20;
+
+const KIND_IMAGE: i64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct Clip {
     pub id: i64,
+    /// The text, or for images a key like `image:1920x1080:<hash>`.
     pub content: String,
     pub pinned: bool,
     pub saved: bool,
+    pub is_image: bool,
+}
+
+/// What gets put back on the clipboard.
+pub enum Payload {
+    Text(String),
+    /// PNG bytes.
+    Image(Vec<u8>),
 }
 
 pub struct Db {
@@ -51,6 +64,17 @@ impl Db {
              );
              CREATE INDEX IF NOT EXISTS clips_last_used ON clips(last_used);",
         )?;
+        // Columns added for image support (older databases lack them).
+        let has_kind: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name = 'kind'")?
+            .exists([])?;
+        if !has_kind {
+            conn.execute_batch(
+                "ALTER TABLE clips ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE clips ADD COLUMN data BLOB;
+                 ALTER TABLE clips ADD COLUMN thumb BLOB;",
+            )?;
+        }
         Ok(Self { conn })
     }
 
@@ -65,12 +89,42 @@ impl Db {
              ON CONFLICT(content) DO UPDATE SET last_used = excluded.last_used",
             params![content, now],
         )?;
+        self.trim()
+    }
+
+    /// Record a copied image.
+    pub fn add_image(&self, image: &crate::images::Stored) -> Result<()> {
+        if image.png.len() > crate::images::MAX_IMAGE_BYTES {
+            return Ok(());
+        }
+        let now = now_ms();
         self.conn.execute(
-            "DELETE FROM clips WHERE pinned = 0 AND saved_at IS NULL AND id NOT IN (
-                 SELECT id FROM clips WHERE pinned = 0 AND saved_at IS NULL
-                 ORDER BY last_used DESC LIMIT ?1)",
-            params![HISTORY_LIMIT],
+            "INSERT INTO clips (content, created, last_used, kind, data, thumb)
+             VALUES (?1, ?2, ?2, ?3, ?4, ?5)
+             ON CONFLICT(content) DO UPDATE SET last_used = excluded.last_used",
+            params![crate::images::content_key(image), now, KIND_IMAGE, image.png, image.thumb],
         )?;
+        self.trim()
+    }
+
+    fn trim(&self) -> Result<()> {
+        for (filter, limit) in [("", HISTORY_LIMIT), ("AND kind = 1", IMAGE_LIMIT)] {
+            self.conn.execute(
+                &format!(
+                    "DELETE FROM clips WHERE pinned = 0 AND saved_at IS NULL {filter} AND id NOT IN (
+                         SELECT id FROM clips WHERE pinned = 0 AND saved_at IS NULL {filter}
+                         ORDER BY last_used DESC LIMIT ?1)"
+                ),
+                params![limit],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Moves a clip to the top of the history.
+    pub fn touch(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE clips SET last_used = ?2 WHERE id = ?1", params![id, now_ms()])?;
         Ok(())
     }
 
@@ -82,6 +136,7 @@ impl Db {
                 content: r.get(1)?,
                 pinned: r.get(2)?,
                 saved: r.get::<_, Option<i64>>(3)?.is_some(),
+                is_image: r.get::<_, i64>(4)? == KIND_IMAGE,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -90,7 +145,7 @@ impl Db {
     /// All clips: pinned first, then most recently used.
     pub fn history(&self) -> Result<Vec<Clip>> {
         self.query(
-            "SELECT id, content, pinned, saved_at FROM clips
+            "SELECT id, content, pinned, saved_at, kind FROM clips
              ORDER BY pinned DESC, last_used DESC",
         )
     }
@@ -98,16 +153,30 @@ impl Db {
     /// Saved clips in the order they were saved, so their numbers stay stable.
     pub fn saved(&self) -> Result<Vec<Clip>> {
         self.query(
-            "SELECT id, content, pinned, saved_at FROM clips
+            "SELECT id, content, pinned, saved_at, kind FROM clips
              WHERE saved_at IS NOT NULL ORDER BY saved_at ASC",
         )
     }
 
-    pub fn get(&self, id: i64) -> Result<Option<String>> {
+    pub fn payload(&self, id: i64) -> Result<Option<Payload>> {
         Ok(self
             .conn
-            .query_row("SELECT content FROM clips WHERE id = ?1", [id], |r| r.get(0))
+            .query_row("SELECT kind, content, data FROM clips WHERE id = ?1", [id], |r| {
+                Ok(if r.get::<_, i64>(0)? == KIND_IMAGE {
+                    Payload::Image(r.get(2)?)
+                } else {
+                    Payload::Text(r.get(1)?)
+                })
+            })
             .optional()?)
+    }
+
+    pub fn thumb(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .query_row("SELECT thumb FROM clips WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?
+            .flatten())
     }
 
     pub fn set_pinned(&self, id: i64, pinned: bool) -> Result<()> {

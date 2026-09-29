@@ -102,18 +102,37 @@ install_linux() {
     fi
 
     nohup "$LINUX_BIN" >/dev/null 2>&1 &
-    cat <<EOF
+    command -v wl-paste >/dev/null 2>&1 || say "Tip: install 'wl-clipboard' for image history and instant capture"
 
-clipr is installed at $LINUX_BIN and running.
+    echo
+    echo "clipr is installed at $LINUX_BIN and running."
+    echo
+    if [ -f "$HOME/.config/hypr/hyprland.lua" ]; then
+        # Hyprland 0.56+ / Omarchy: Lua config (hyprland.conf is ignored).
+        cat <<EOF
+Your Hyprland uses a Lua config. Add these lines, then run 'hyprctl reload'
+(pick another key if SUPER + SHIFT + V is taken):
 
-Add this to your Hyprland config (Omarchy: ~/.config/hypr/bindings.conf), then run
-'hyprctl reload'. Pick another key if SUPER SHIFT V is taken:
+  ~/.config/hypr/bindings.lua:
+    o.bind("SUPER + SHIFT + V", "clipr clipboard history", os.getenv("HOME") .. "/.local/bin/clipr toggle")
+
+  ~/.config/hypr/autostart.lua:
+    o.launch_on_start(os.getenv("HOME") .. "/.local/bin/clipr")
+
+  ~/.config/hypr/hyprland.lua (at the end):
+    o.window("^(clipr)$", { float = true, center = true })
+EOF
+    else
+        cat <<EOF
+Add this to ~/.config/hypr/hyprland.conf, then run 'hyprctl reload'
+(pick another key if SUPER SHIFT V is taken):
 
   exec-once = $LINUX_BIN
   bind = SUPER SHIFT, V, exec, $LINUX_BIN toggle
   windowrule = float, class:^(clipr)$
   windowrule = center, class:^(clipr)$
 EOF
+    fi
 }
 
 uninstall_linux() {
