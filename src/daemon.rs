@@ -151,9 +151,25 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
         toggle_popup();
         return Ok(());
     }
-    let id: i64 = arg.parse().with_context(|| format!("bad command {line:?}"))?;
-    let Some(payload) = db.payload(id)? else { return Ok(()) };
-    db.touch(id)?; // move to top of history
+    // One id, or several ("3,7,9") which are joined line by line.
+    let ids: Vec<i64> = arg
+        .split(',')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("bad command {line:?}"))?;
+    let payload = if let [id] = ids[..] {
+        let Some(payload) = db.payload(id)? else { return Ok(()) };
+        db.touch(id)?; // move to top of history
+        payload
+    } else {
+        let mut texts = Vec::new();
+        for id in &ids {
+            if let Some(Payload::Text(t)) = db.payload(*id)? {
+                texts.push(t.trim_end_matches('\n').to_owned());
+            }
+        }
+        Payload::Text(texts.join("\n"))
+    };
 
     match (cmd, payload) {
         ("TYPE", Payload::Text(text)) => {

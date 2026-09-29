@@ -27,9 +27,11 @@ Uninstall: `curl -fsSL https://raw.githubusercontent.com/Mudales/clipr/master/in
 | ⌘/Ctrl + Enter | type it out (for fields that block paste) |
 | ⌘/Ctrl + S | save / unsave |
 | ⌘/Ctrl + P | pin / unpin (pinned stay at the top of History) |
-| ⌘/Ctrl + D | delete |
+| ⌘/Ctrl + D | delete (with a multi-selection: deletes all selected except pinned & saved) |
+| ⌘/Ctrl + A | select all shown clips (again to unselect) — then ⌘/Ctrl+D clears the history |
+| Shift + ↑ ↓ | extend the selection; copy/paste then joins the selected clips line by line |
 | Tab | switch History ⇄ Saved |
-| Esc | close |
+| Esc | clear the selection, or close |
 
 ## Build from source
 

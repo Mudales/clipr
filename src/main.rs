@@ -25,6 +25,7 @@ USAGE:
     clipr toggle     open/close the picker (starts the daemon if needed) — bind this to a key
     clipr pick       open the picker directly
     clipr store      save clipboard data from stdin (used by `wl-paste --watch`)
+    clipr clear      delete the history, keeping pinned and saved clips
     clipr --version  print the version
 ";
 
@@ -34,6 +35,9 @@ fn main() -> ExitCode {
         Some("toggle") => toggle(),
         Some("pick") => ui::run(ui::Mode::OneShot),
         Some("store") => daemon::store_from_stdin(),
+        Some("clear") => db::Db::open()
+            .and_then(|db| db.clear())
+            .map(|n| println!("cleared {n} clips (kept pinned & saved)")),
         Some("-V" | "--version") => {
             println!("clipr {}", env!("CARGO_PKG_VERSION"));
             Ok(())

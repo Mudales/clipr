@@ -192,6 +192,11 @@ impl Db {
         Ok(())
     }
 
+    /// Deletes the whole history except pinned and saved clips.
+    pub fn clear(&self) -> Result<usize> {
+        Ok(self.conn.execute("DELETE FROM clips WHERE pinned = 0 AND saved_at IS NULL", [])?)
+    }
+
     pub fn delete(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM clips WHERE id = ?1", [id])?;
         Ok(())

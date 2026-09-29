@@ -3,7 +3,7 @@
 use crate::db::{Clip, Db};
 use crate::images::parse_key;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::ipc;
 use anyhow::{Result, anyhow};
 use eframe::egui::{
@@ -88,6 +88,8 @@ struct Picker {
     scroll_to_selected: bool,
     scroll_offset: f32,
     view_height: f32,
+    /// Multi-selection (⌘A / Shift+↑↓), by clip id.
+    marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
     thumbs: RefCell<HashMap<i64, Option<egui::TextureHandle>>>,
 }
@@ -274,6 +276,7 @@ impl Picker {
             scroll_offset: 0.0,
             view_height: 0.0,
             thumbs: RefCell::default(),
+            marked: HashSet::new(),
         }
     }
 
@@ -359,11 +362,13 @@ impl Picker {
             Tab::Saved => Tab::History,
         };
         self.selected = 0;
+        self.marked.clear();
         self.reload();
     }
 
     fn show(&mut self, ctx: &egui::Context) {
         self.query.clear();
+        self.marked.clear();
         self.selected = 0;
         self.status = None;
         self.was_focused = false;
@@ -392,19 +397,78 @@ impl Picker {
 
     /// Hands the chosen clip to the daemon (which outlives this window) and closes.
     fn choose(&mut self, ctx: &egui::Context, action: &str) {
-        let Some(id) = self.current().map(|c| c.id) else { return };
-        match ipc::send(&format!("{action} {id}")) {
+        let ids = self.target_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let ids: Vec<String> = ids.iter().map(i64::to_string).collect();
+        match ipc::send(&format!("{action} {}", ids.join(","))) {
             Ok(()) => self.close(ctx, false),
             Err(_) => self.status = Some("clipr daemon is not running — start it with `clipr`".into()),
         }
     }
 
+    /// The marked clips in list order, or just the current one.
+    fn target_ids(&self) -> Vec<i64> {
+        if self.marked.is_empty() {
+            return self.current().map(|c| c.id).into_iter().collect();
+        }
+        self.filtered
+            .iter()
+            .map(|&i| self.items[i].clip.id)
+            .filter(|id| self.marked.contains(id))
+            .collect()
+    }
+
+    fn select_id(&mut self, id: i64) {
+        if let Some(pos) = self.filtered.iter().position(|&i| self.items[i].clip.id == id) {
+            self.selected = pos;
+            self.scroll_to_selected = true;
+        }
+    }
+
+    /// Applies `f` to the current clip, keeping the selection on that clip
+    /// even if it moves (e.g. pinning moves it to the top).
     fn edit_current(&mut self, f: impl FnOnce(&Db, &Clip) -> Result<()>) {
         if let Some(clip) = self.current().cloned() {
             if let Err(e) = f(&self.db, &clip) {
                 self.status = Some(format!("database error: {e}"));
             }
             self.reload();
+            self.select_id(clip.id);
+        }
+    }
+
+    /// Deletes the marked clips, except pinned and saved ones.
+    fn delete_marked(&mut self) {
+        let doomed: Vec<i64> = self
+            .items
+            .iter()
+            .filter(|it| self.marked.contains(&it.clip.id) && !it.clip.pinned && !it.clip.saved)
+            .map(|it| it.clip.id)
+            .collect();
+        let kept = self.marked.len() - doomed.len();
+        for id in &doomed {
+            if let Err(e) = self.db.delete(*id) {
+                self.status = Some(format!("database error: {e}"));
+            }
+        }
+        self.marked.clear();
+        self.selected = 0;
+        self.reload();
+        if self.status.is_none() {
+            self.status = Some(match kept {
+                0 => format!("Deleted {} clips", doomed.len()),
+                _ => format!("Deleted {} clips, kept {kept} pinned/saved", doomed.len()),
+            });
+        }
+    }
+
+    fn toggle_mark(&mut self) {
+        if let Some(id) = self.current().map(|c| c.id) {
+            if !self.marked.insert(id) {
+                self.marked.remove(&id);
+            }
         }
     }
 
@@ -415,7 +479,22 @@ impl Picker {
         let mut edit = None;
         ctx.input_mut(|i| {
             if i.consume_key(Modifiers::NONE, Key::Escape) {
-                action = Some("CLOSE");
+                action = Some(if self.marked.is_empty() { "CLOSE" } else { "UNMARK" });
+            }
+            if i.consume_key(cmd, Key::A) {
+                action = Some("MARK_ALL");
+            }
+            // Shift+↑/↓ extends the multi-selection (checked before plain arrows).
+            for (key, delta) in [(Key::ArrowDown, 1), (Key::ArrowUp, -1)] {
+                if i.consume_key(Modifiers::SHIFT, key) {
+                    if self.marked.is_empty() {
+                        self.toggle_mark();
+                    }
+                    self.move_selection(delta);
+                    if let Some(id) = self.current().map(|c| c.id) {
+                        self.marked.insert(id);
+                    }
+                }
             }
             for (key, delta) in [
                 (Key::ArrowDown, 1),
@@ -468,14 +547,23 @@ impl Picker {
                 action = Some("PASTE");
             }
         }
+        if edit.is_some() {
+            self.status = None;
+        }
         match edit {
             Some('p') => self.edit_current(|db, c| db.set_pinned(c.id, !c.pinned)),
             Some('s') => self.edit_current(|db, c| db.set_saved(c.id, !c.saved)),
+            Some('d') if !self.marked.is_empty() => self.delete_marked(),
             Some('d') => self.edit_current(|db, c| db.delete(c.id)),
             _ => {}
         }
         match action {
             Some("CLOSE") => self.close(ctx, true),
+            Some("UNMARK") => self.marked.clear(),
+            Some("MARK_ALL") => {
+                let all: HashSet<i64> = self.filtered.iter().map(|&i| self.items[i].clip.id).collect();
+                self.marked = if self.marked == all { HashSet::new() } else { all };
+            }
             Some("TAB") => self.switch_tab(),
             Some(a) => self.choose(ctx, a),
             None => {}
@@ -514,6 +602,7 @@ impl Picker {
         }
         if search.changed() {
             self.selected = 0;
+            self.marked.clear();
             self.refilter();
         }
 
@@ -576,9 +665,12 @@ impl Picker {
                 let (rect, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
                 let selected = row == self.selected;
+                let marked = self.marked.contains(&item.clip.id);
                 let painter = ui.painter_at(rect);
                 if selected {
                     painter.rect_filled(rect, 6.0, t.accent);
+                } else if marked {
+                    painter.rect_filled(rect, 6.0, t.accent.gamma_multiply(0.35));
                 } else if resp.hovered() {
                     painter.rect_filled(rect, 6.0, t.hover);
                 }
@@ -696,12 +788,17 @@ impl Picker {
     }
 
     fn footer(&self, ui: &mut egui::Ui, t: &Theme) {
+        let m = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
         let text = match &self.status {
             Some(s) => s.clone(),
+            None if !self.marked.is_empty() => format!(
+                "{} selected    {m}D Delete (keeps pinned & saved)    {m}C Copy    ↩ Paste    Esc Cancel",
+                self.marked.len()
+            ),
             None if cfg!(target_os = "macos") => {
-                "↩ Paste    ⌘↩ Type    ⌘C Copy    ⌘S Save    ⌘P Pin    ⌘D Delete    Tab Switch".into()
+                "↩ Paste   ⌘↩ Type   ⌘C Copy   ⌘S Save   ⌘P Pin   ⌘D Delete   ⌘A Select all".into()
             }
-            None => "Enter Paste   Ctrl+Enter Type   Ctrl+C Copy   Ctrl+S Save   Ctrl+P Pin   Ctrl+D Delete".into(),
+            None => "Enter Paste  Ctrl+Enter Type  Ctrl+C Copy  Ctrl+S Save  Ctrl+P Pin  Ctrl+D Delete  Ctrl+A All".into(),
         };
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
         ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.border));
