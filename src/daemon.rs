@@ -104,8 +104,19 @@ fn watch_clipboard() -> Result<()> {
 #[cfg(not(any(target_os = "macos", windows)))]
 fn watch_clipboard() -> Result<()> {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() && platform::spawn_wl_watchers() {
+        // wl-paste --watch records copies, but on Hyprland it never reports
+        // the clipboard being emptied, so watch for that here (cheap: only
+        // asks which formats are offered).
+        let db = Db::open()?;
+        // Start from the current state, so an empty clipboard at login isn't "restored".
+        let mut had_data = !platform::clipboard_is_empty();
         loop {
-            thread::park();
+            thread::sleep(Duration::from_millis(400));
+            let empty = platform::clipboard_is_empty();
+            if empty && had_data && Settings::load().keep_clipboard {
+                log_err("keep clipboard", platform::restore_clipboard(&db));
+            }
+            had_data = !empty;
         }
     }
     let mut db = Db::open()?;
@@ -133,8 +144,16 @@ pub fn store_from_stdin() -> Result<()> {
     // wl-paste sets this. "sensitive" = marked secret by a password manager;
     // "clear" = emptied on purpose (e.g. a password manager after 30s): leave
     // it. "nil" = emptied because the app that owned it closed: put it back.
+    #[cfg(target_os = "linux")]
+    let mark = |ok: bool| platform::mark_restorable(ok);
+    #[cfg(not(target_os = "linux"))]
+    let mark = |_: bool| ();
     match std::env::var("CLIPBOARD_STATE").as_deref() {
-        Ok("sensitive" | "clear") => return Ok(()),
+        Ok("sensitive") => {
+            mark(false); // a password: never put it back
+            return Ok(());
+        }
+        Ok("clear") => return Ok(()),
         #[cfg(target_os = "linux")]
         Ok("nil") => {
             if settings.keep_clipboard {
@@ -148,6 +167,7 @@ pub fn store_from_stdin() -> Result<()> {
     if !settings.ignore_apps.is_empty()
         && platform::active_window_class().is_some_and(|c| settings.ignores_app(&c))
     {
+        mark(false);
         return Ok(());
     }
     let mut data = Vec::new();
@@ -156,14 +176,20 @@ pub fn store_from_stdin() -> Result<()> {
     db.set_limits(settings.history_size, settings.image_limit);
     if crate::images::looks_like_image(&data) {
         if !settings.save_images {
+            mark(false);
             return Ok(());
         }
-        db.add_image(&crate::images::from_encoded(&data)?)
+        db.add_image(&crate::images::from_encoded(&data)?)?;
+        mark(true);
+        Ok(())
     } else if let Ok(text) = String::from_utf8(data) {
         if settings.ignores_text(&text) {
+            mark(false);
             return Ok(());
         }
-        db.add(&text)
+        db.add(&text)?;
+        mark(!text.trim().is_empty());
+        Ok(())
     } else {
         Ok(())
     }

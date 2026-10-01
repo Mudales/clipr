@@ -67,15 +67,34 @@ pub fn type_text(text: &str) -> Result<()> {
     }
 }
 
+/// Whether nothing at all is on the (Wayland) clipboard.
+pub fn clipboard_is_empty() -> bool {
+    use wl_clipboard_rs::paste::{ClipboardType, Error, Seat, get_mime_types};
+    match get_mime_types(ClipboardType::Regular, Seat::Unspecified) {
+        Ok(types) => types.is_empty(),
+        Err(Error::ClipboardEmpty | Error::NoMimeType) => true,
+        Err(_) => false, // can't tell (e.g. no seat): don't act
+    }
+}
+
+fn restorable_marker() -> std::path::PathBuf {
+    crate::db::data_dir().join("restorable")
+}
+
+/// Records whether what's on the clipboard now may be put back after its app
+/// closes: yes for clips saved to the history, no for passwords and ignored
+/// apps / patterns.
+pub fn mark_restorable(ok: bool) {
+    let _ = std::fs::write(restorable_marker(), if ok { "yes" } else { "no" });
+}
+
 /// Puts the most recent clip back on the clipboard after the app that owned
 /// it closed (Wayland then leaves the clipboard empty). `wl-copy` keeps
 /// serving it in the background.
 pub fn restore_clipboard(db: &crate::db::Db) -> Result<()> {
     use std::io::Write;
-    // The text and image watchers both report "empty"; only restore once,
-    // and only if the clipboard really has nothing in any format.
-    let types = Command::new("wl-paste").arg("--list-types").output();
-    if types.is_ok_and(|o| o.status.success() && !o.stdout.is_empty()) {
+    // The last copy was a password or ignored: leave the clipboard empty.
+    if std::fs::read_to_string(restorable_marker()).is_ok_and(|s| s.trim() == "no") {
         return Ok(());
     }
     let marker = crate::db::data_dir().join("restored");

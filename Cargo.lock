@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "clipr"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -308,6 +308,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winit",
  "winresource",
+ "wl-clipboard-rs",
 ]
 
 [[package]]
