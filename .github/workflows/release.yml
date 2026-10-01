@@ -18,6 +18,29 @@ jobs:
       - run: |
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
+      # Signs with the stable clipr-dev certificate (secrets MACOS_CERT_P12,
+      # MACOS_CERT_PASSWORD), so macOS keeps the Accessibility permission
+      # across updates. The runner is thrown away afterwards.
+      - name: Import signing certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then echo "no certificate secret: ad-hoc signing"; exit 0; fi
+          KC="$RUNNER_TEMP/build.keychain-db"
+          KPW="$(openssl rand -hex 16)"
+          security create-keychain -p "$KPW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KPW" "$KC"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KPW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          # codesign only uses certificates trusted for code signing.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain assets/clipr-signing.pem
+          security find-identity -v -p codesigning "$KC"
+          echo "CLIPR_SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
       - name: Universal clipr.app
         run: |
           mkdir -p dist

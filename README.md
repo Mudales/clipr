@@ -93,6 +93,8 @@ Certificate…*, name `clipr-dev`, Identity Type *Self Signed Root*, Certificate
 needs the permission re-granted (remove the old `clipr` entry first, or run
 `tccutil reset Accessibility dev.clipr`).
 
+- Releases are signed with a stable (self-signed) certificate, so the Accessibility
+  permission survives updates; only builds from source are signed ad-hoc.
 - The first paste asks for **Accessibility** permission (System Settings → Privacy & Security → Accessibility) — needed to press ⌘V for you.
 - macOS may ask once about clipboard access — choose *Always Allow*.
 - Clips marked as secret by password managers are skipped.
