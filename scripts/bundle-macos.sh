@@ -30,8 +30,10 @@ PLIST
 IDENTITY="${CLIPR_SIGN_IDENTITY:-clipr-dev}"
 if [ -n "${CLIPR_SIGN_KEYCHAIN:-}" ]; then
     codesign --force --sign "$IDENTITY" --keychain "$CLIPR_SIGN_KEYCHAIN" --identifier dev.clipr "$APP"
-    # Must be tied to the certificate, not to this build's hash.
-    codesign -d -r- "$APP" 2>&1 | grep -q 'certificate leaf' || { echo "error: not signed with $IDENTITY" >&2; exit 1; }
+    # Must be tied to the certificate ("certificate root" for a self-signed
+    # one, "certificate leaf" otherwise), not to this build's hash.
+    codesign -d -r- "$APP" 2>&1 | grep designated >&2
+    codesign -d -r- "$APP" 2>&1 | grep -qE 'certificate (root|leaf)' || { echo "error: not signed with $IDENTITY" >&2; exit 1; }
 elif security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
     codesign --force --sign "$IDENTITY" --identifier dev.clipr "$APP"
 else
