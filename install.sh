@@ -11,6 +11,8 @@ REPO="Mudales/clipr"
 VERSION="${CLIPR_VERSION:-latest}"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+# Timestamped progress line (shows up in update.log for self-updates).
+step() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 url_for() {
@@ -47,7 +49,9 @@ MAC_AGENT="$HOME/Library/LaunchAgents/dev.clipr.plist"
 install_macos() {
     say "Downloading clipr for macOS"
     download "$(url_for clipr-macos-universal.zip)" "$TMP/clipr.zip"
+    step "downloaded; running clipr: $(pgrep -x clipr | tr '\n' ' ')"
     stop_clipr
+    step "stopped; running clipr: $(pgrep -x clipr | tr '\n' ' ')"
     mkdir -p "$HOME/Applications"
     rm -rf "$MAC_APP"
     ditto -x -k "$TMP/clipr.zip" "$HOME/Applications"
@@ -69,9 +73,20 @@ install_macos() {
 EOF
     launchctl unload "$MAC_AGENT" 2>/dev/null || true
     stop_clipr # in case an old copy was started while we were installing
-    launchctl load "$MAC_AGENT"
-
+    step "installed $("$MAC_APP/Contents/MacOS/clipr" --version 2>/dev/null)"
+    launchctl load "$MAC_AGENT" # starts clipr (RunAtLoad)
     open "$MAC_APP"
+    # Make sure the new clipr is really running; start it again if not.
+    i=0
+    while ! pgrep -x clipr >/dev/null 2>&1 && [ $i -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if ! pgrep -x clipr >/dev/null 2>&1; then
+        step "clipr didn't start, trying again"
+        open -n "$MAC_APP"
+    fi
+    step "started; running clipr: $(pgrep -x clipr | tr '\n' ' ')"
     cat <<EOF
 
 clipr is installed and running.

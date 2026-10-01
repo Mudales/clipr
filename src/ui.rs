@@ -156,7 +156,7 @@ pub fn run(mode: Mode) -> Result<()> {
             setup_fonts(&cc.egui_ctx);
             let _ = CONTEXT.set(cc.egui_ctx.clone());
             let mut picker = Picker::new(db, mode);
-            picker.status = picker.keys.errors.first().cloned();
+            picker.status = crate::update::take_updated_notice().or_else(|| picker.keys.errors.first().cloned());
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
@@ -459,8 +459,9 @@ impl Picker {
         self.view = View::List;
         self.query.clear();
         self.marked.clear();
+        let notice = crate::update::take_updated_notice();
         self.selected = 0;
-        self.status = self.keys.errors.first().cloned();
+        self.status = notice.or_else(|| self.keys.errors.first().cloned());
         self.was_focused = false;
         self.reload();
         self.visible = true;

@@ -29,6 +29,26 @@ impl Default for Updater {
     }
 }
 
+fn result_ok(s: &Status) -> bool {
+    matches!(s, Status::Updating(_))
+}
+
+fn updated_marker() -> std::path::PathBuf {
+    crate::db::data_dir().join("updated_from")
+}
+
+/// After a self-update: "Updated to 0.8.4" (once), for the picker to show.
+pub fn take_updated_notice() -> Option<String> {
+    let from = std::fs::read_to_string(updated_marker()).ok()?;
+    let _ = std::fs::remove_file(updated_marker());
+    (from.trim() != current()).then(|| format!("Updated to clipr {}", current()))
+}
+
+/// Whether we were just updated (without consuming the notice).
+pub fn just_updated() -> bool {
+    updated_marker().exists()
+}
+
 pub fn current() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -84,14 +104,22 @@ impl Updater {
         });
     }
 
-    /// Starts the installer detached. It stops this clipr, installs the new
-    /// version and starts it, so this process is about to be replaced.
+    /// Starts the installer detached and quits this clipr, so nothing has to
+    /// stop it (the installer installs the new version and starts it).
     pub fn install(&self) {
         let result = spawn_installer();
         self.set(match result {
             Ok(()) => Status::Updating(std::time::Instant::now()),
             Err(e) => Status::Failed(format!("couldn't start the installer: {e}")),
         });
+        if result_ok(&self.status()) {
+            let _ = std::fs::write(updated_marker(), current());
+            // Give the installer a moment to start, then get out of its way.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                std::process::exit(0);
+            });
+        }
     }
 }
 

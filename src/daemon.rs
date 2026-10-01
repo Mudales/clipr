@@ -47,12 +47,22 @@ pub fn run() -> Result<()> {
         #[cfg(target_os = "macos")]
         platform::accessibility_trusted(true); // ask once, up front
         let _hotkey = crate::hotkey::register_hotkey(&crate::keys::Keymap::load().hotkey, toggle_popup)?;
+        // Just updated: open the picker once, showing "Updated to …".
+        if crate::update::just_updated() {
+            toggle_popup();
+        }
         return crate::ui::run(crate::ui::Mode::Resident);
     }
 
     #[cfg(not(any(target_os = "macos", windows)))]
-    loop {
-        thread::park();
+    {
+        if crate::update::just_updated() {
+            thread::sleep(Duration::from_millis(500));
+            toggle_popup();
+        }
+        loop {
+            thread::park();
+        }
     }
 }
 
