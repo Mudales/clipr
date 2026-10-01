@@ -10,6 +10,7 @@ mod ipc;
 mod keys;
 mod settings;
 mod ui;
+mod update;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -38,6 +39,7 @@ USAGE:
     clipr store      save clipboard data from stdin (used by `wl-paste --watch`)
     clipr clear      delete the history, keeping pinned and saved clips
     clipr keys       print the path of the keyboard-shortcut file (keys.conf)
+    clipr update     check for a newer version and install it
     clipr --version  print the version
 ";
 
@@ -61,6 +63,7 @@ fn main() -> ExitCode {
             println!("{}", keys::ensure_config().display());
             Ok(())
         }
+        Some("update") => update_cli(),
         Some("-V" | "--version") => {
             println!("clipr {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -96,4 +99,31 @@ fn toggle() -> Result<()> {
         }
     }
     ipc::send("TOGGLE")
+}
+
+/// `clipr update`: same as Settings → Check for updates → Update now.
+fn update_cli() -> Result<()> {
+    let updater = update::Updater::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    updater.check(move || {
+        let _ = tx.send(());
+    });
+    let _ = rx.recv();
+    match updater.status() {
+        update::Status::Available(v) => {
+            println!("updating clipr {} → {v}…", update::current());
+            updater.install();
+            if let update::Status::Failed(e) = updater.status() {
+                bail!(e);
+            }
+            println!("the installer is running; clipr restarts by itself");
+            Ok(())
+        }
+        update::Status::UpToDate => {
+            println!("clipr {} is the latest version", update::current());
+            Ok(())
+        }
+        update::Status::Failed(e) => bail!(e),
+        _ => Ok(()),
+    }
 }

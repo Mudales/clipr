@@ -104,6 +104,7 @@ struct Picker {
     view_height: f32,
     keys: Keymap,
     settings: Settings,
+    updater: crate::update::Updater,
     view: View,
     /// Edits in progress on the Settings page.
     page: settings_page::Draft,
@@ -316,6 +317,7 @@ impl Picker {
             status: None,
             keys: Keymap::load(),
             settings: Settings::load(),
+            updater: Default::default(),
             view: View::List,
             page: settings_page::Draft::default(),
         }
@@ -561,6 +563,9 @@ impl Picker {
                 (Key::ArrowUp, -1),
                 (Key::PageDown, 10),
                 (Key::PageUp, -10),
+                // Home / End: first / last clip (the search box doesn't need them).
+                (Key::Home, isize::MIN / 2),
+                (Key::End, isize::MAX / 2),
             ] {
                 if i.consume_key(Modifiers::NONE, key) {
                     self.move_selection(delta);

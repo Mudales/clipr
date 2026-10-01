@@ -124,7 +124,7 @@ impl Picker {
         let before = self.settings.clone();
         let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
         if std::env::var("CLIPR_OPEN").as_deref() == Ok("settings-bottom") {
-            area = area.vertical_scroll_offset(520.0); // development aid
+            area = area.vertical_scroll_offset(900.0); // development aid
         }
         area.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -133,6 +133,7 @@ impl Picker {
             self.appearance(ui, t);
             self.ignore(ui, t);
             self.shortcuts(ui, t);
+            self.updates(ui, ctx, t);
             ui.add_space(8.0);
         });
         if self.settings != before {
@@ -249,6 +250,48 @@ impl Picker {
             if let Err(e) = regex_lite::Regex::new(p) {
                 let first = e.to_string().lines().last().unwrap_or("").to_owned();
                 ui.label(RichText::new(format!("Invalid: {p}  ({first})")).size(11.5).color(egui::Color32::from_rgb(220, 80, 70)));
+            }
+        }
+    }
+
+    fn updates(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Theme) {
+        use crate::update::{Status, current};
+        section(ui, t, "UPDATES");
+        let status = self.updater.status();
+        ui.horizontal(|ui| {
+            ui.label(format!("clipr {}", current()));
+            let busy = matches!(status, Status::Checking | Status::Updating);
+            if ui.add_enabled(!busy, egui::Button::new("Check for updates")).clicked() {
+                let ctx = ctx.clone();
+                self.updater.check(move || ctx.request_repaint());
+            }
+        });
+        match &status {
+            Status::Idle => {}
+            Status::Checking => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Checking…");
+                });
+            }
+            Status::UpToDate => hint(ui, t, "You have the latest version."),
+            Status::Available(v) => {
+                ui.label(RichText::new(format!("Version {v} is available.")).color(t.accent));
+                if cfg!(target_os = "macos") {
+                    hint(ui, t, "After updating, macOS asks again for Accessibility: allow clipr.");
+                }
+                if ui.button(format!("Update to {v} now")).clicked() {
+                    self.updater.install();
+                }
+            }
+            Status::Updating => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Installing… clipr restarts by itself in a few seconds.");
+                });
+            }
+            Status::Failed(e) => {
+                ui.label(RichText::new(format!("Update check failed: {e}")).color(egui::Color32::from_rgb(220, 80, 70)));
             }
         }
     }

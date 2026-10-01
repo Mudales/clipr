@@ -34,6 +34,7 @@ Defaults (⌘ on macOS, Ctrl on Windows and Linux). All of them can be changed, 
 |---|---|
 | type | search |
 | ↑ ↓ PgUp PgDn | move |
+| Home / End | first / last clip |
 | Enter, ⌘/Ctrl + V | paste into the app you were in |
 | ⌘/Ctrl + 1–9 | paste item 1–9 |
 | ⌘/Ctrl + C, Shift + Enter | copy only |
@@ -64,6 +65,7 @@ Open with ⚙ (next to the tabs) or ⌘/Ctrl + ,. Changes are saved immediately 
 - **Ignore:** apps whose copies are never saved (app name or bundle id on macOS,
   window class on Linux) and regular expressions for text that is never saved
 - **Keyboard shortcuts:** edit every shortcut; invalid entries are flagged and not saved
+- **Updates:** check GitHub for a newer version and install it in place (also `clipr update`)
 
 The shortcuts live in `~/.config/clipr/keys.conf` (`clipr keys` prints the path) and can
 also be edited by hand. The macOS global shortcut (`hotkey`) applies after restarting
