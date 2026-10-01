@@ -160,9 +160,12 @@ pub fn run(mode: Mode) -> Result<()> {
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
+            // Development aid: CLIPR_SELECT=n selects row n.
+            if let Some(n) = std::env::var("CLIPR_SELECT").ok().and_then(|v| v.parse().ok()) {
+                picker.selected = n;
+            }
             // Development aid: CLIPR_OPEN=actions opens the Actions menu.
             if std::env::var("CLIPR_OPEN").as_deref() == Ok("actions") {
-                picker.selected = 2;
                 picker.open_actions_menu();
             }
             // Development aid: CLIPR_OPEN=confirm shows the delete dialog.

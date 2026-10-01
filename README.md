@@ -1,12 +1,50 @@
-# clipr
+<p align="center">
+  <img src="assets/clipr-256.png" width="96" alt="clipr icon">
+</p>
 
-Light, keyboard-driven clipboard history for macOS, Windows and Linux (Hyprland), written in Rust.
+<h1 align="center">clipr</h1>
 
-- **History** of everything you copy: text and images (up to 1000 clips / 100 images, SQLite)
-- **Saved** tab for clips you use often (numbered in the order you saved them)
-- Fuzzy search as you type
-- Paste straight into the app you were using, or **type it out** as keystrokes
-- Right-click menu, Maccy-style Settings page and editable shortcuts
+<p align="center">
+  <b>A fast, keyboard-driven clipboard manager for macOS, Windows and Linux.</b><br>
+  Clipboard history with search, saved snippets, images and actions, in a tiny native app written in Rust.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Mudales/clipr/releases/latest"><img src="https://img.shields.io/github/v/release/Mudales/clipr" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platforms">
+  <img src="https://img.shields.io/badge/Wayland-Hyprland%20%2F%20Omarchy-5e81ac" alt="Wayland">
+  <img src="https://img.shields.io/badge/made%20with-Rust-orange" alt="Rust">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/history.png" width="440" alt="clipr clipboard history with search">
+</p>
+
+Press a shortcut, type a few letters, hit Enter: the clip is pasted into the app you were
+using. clipr remembers everything you copy, so you never lose a link, command or snippet
+again. It's a free, open-source alternative to **Maccy** and **Clipdiary**, and works where
+most clipboard managers don't: on Wayland (Hyprland, Omarchy) as well as macOS and Windows.
+
+## Features
+
+- **Clipboard history** of text and images, kept between restarts
+- **Instant fuzzy search** as you type, and Hebrew / right-to-left text support
+- **Paste into the previous app** with Enter or ⌘/Ctrl + 1–9
+- **Type it out** as keystrokes, for fields and remote desktops that block paste
+- **Saved tab** for snippets you reuse, and **pinned** clips that stay on top
+- **Actions:** run a command on a clip (open link, UPPERCASE, trim, or your own shell
+  command) and paste the result
+- **Image history** with thumbnails and a large preview
+- **Fully keyboard-driven**, and every shortcut can be changed
+- **Privacy:** skips passwords from password managers, ignores apps and text patterns
+  you choose, and can clear the history after a restart. Everything stays on your computer
+- **Keeps the clipboard** after the app you copied from closes (Linux)
+- **Light:** one small native binary, no Electron, no account, no telemetry
+- **Updates itself** from the Settings page
+
+| Image preview | Actions | Settings |
+|---|---|---|
+| <img src="assets/screenshots/image.png" width="260" alt="Image clipboard history preview"> | <img src="assets/screenshots/actions.png" width="260" alt="Run actions on a clip"> | <img src="assets/screenshots/settings.png" width="260" alt="Maccy-style settings"> |
 
 ## Install (no Rust needed)
 
