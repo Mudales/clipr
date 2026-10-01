@@ -25,6 +25,8 @@ pub struct Settings {
     /// Unpinned, unsaved images kept (they are big).
     pub image_limit: usize,
     pub save_images: bool,
+    /// Clear the history (keeping pinned & saved) after the computer restarts.
+    pub clear_on_restart: bool,
     pub search_mode: SearchMode,
     /// Off: choosing a clip only copies it (Maccy's "Paste automatically").
     pub paste_automatically: bool,
@@ -46,6 +48,7 @@ impl Default for Settings {
             history_size: 1000,
             image_limit: 100,
             save_images: true,
+            clear_on_restart: false,
             search_mode: SearchMode::Fuzzy,
             paste_automatically: true,
             // Hyprland moves focus with the mouse, so closing on focus loss
@@ -89,6 +92,7 @@ impl Settings {
                 "history_size" => s.history_size = value.parse().unwrap_or(s.history_size).clamp(10, 100_000),
                 "image_limit" => s.image_limit = value.parse().unwrap_or(s.image_limit).min(10_000),
                 "save_images" => s.save_images = b.unwrap_or(s.save_images),
+                "clear_on_restart" => s.clear_on_restart = b.unwrap_or(s.clear_on_restart),
                 "search_mode" => {
                     s.search_mode = if value.eq_ignore_ascii_case("exact") { SearchMode::Exact } else { SearchMode::Fuzzy }
                 }
@@ -121,6 +125,7 @@ impl Settings {
         kv("history_size", self.history_size.to_string());
         kv("image_limit", self.image_limit.to_string());
         kv("save_images", self.save_images.to_string());
+        kv("clear_on_restart", self.clear_on_restart.to_string());
         kv("search_mode", if self.search_mode == SearchMode::Exact { "exact" } else { "fuzzy" }.into());
         kv("paste_automatically", self.paste_automatically.to_string());
         kv("close_on_click_away", self.close_on_click_away.to_string());

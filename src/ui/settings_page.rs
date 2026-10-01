@@ -1,14 +1,36 @@
-//! The Settings page (⚙ / ⌘,): Maccy-style preferences plus shortcut editing.
-//! Every change is saved immediately.
+//! The Settings page (⚙ / ⌘,), styled like macOS / Maccy preferences:
+//! tabs on top, rounded cards with label-left / control-right rows and
+//! switches. Every change is saved immediately.
 
 use super::{Picker, Theme};
 use crate::keys::{self, Keymap};
 use crate::settings::{SearchMode, Settings, ThemeChoice};
-use eframe::egui::{self, RichText, TextEdit, vec2};
+use eframe::egui::{self, Align, Align2, Color32, FontId, Layout, RichText, Sense, Stroke, TextEdit, vec2};
+
+const RED: Color32 = Color32::from_rgb(220, 80, 70);
+
+#[derive(Clone, Copy, PartialEq, Default)]
+enum Page {
+    #[default]
+    General,
+    Storage,
+    Ignore,
+    Shortcuts,
+    About,
+}
+
+const PAGES: &[(Page, &str)] = &[
+    (Page::General, "General"),
+    (Page::Storage, "Storage"),
+    (Page::Ignore, "Ignore"),
+    (Page::Shortcuts, "Shortcuts"),
+    (Page::About, "About"),
+];
 
 /// Text being edited on the page (kept between frames).
 #[derive(Default)]
 pub struct Draft {
+    page: Page,
     apps: String,
     patterns: String,
     /// Shortcut text per `keys::EDITABLE` entry, and its validation error.
@@ -16,7 +38,6 @@ pub struct Draft {
     key_errors: Vec<Option<String>>,
     confirm_clear: bool,
     message: Option<String>,
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
     login: bool,
 }
 
@@ -25,13 +46,23 @@ impl Draft {
         let keys: Vec<(String, String)> =
             keys::EDITABLE.iter().map(|(name, _)| (name.to_string(), keymap.raw(name))).collect();
         Self {
+            page: Page::General,
             apps: settings.ignore_apps.join("\n"),
             patterns: settings.ignore_patterns.join("\n"),
             key_errors: vec![None; keys.len()],
             keys,
             confirm_clear: false,
             message: None,
-            login: login_item_enabled(),
+            login: login::enabled(),
+        }
+    }
+}
+
+impl Draft {
+    /// Development aid (CLIPR_OPEN=settings-storage): start on a given tab.
+    pub fn open(&mut self, name: &str) {
+        if let Some((p, _)) = PAGES.iter().find(|(_, l)| l.eq_ignore_ascii_case(name)) {
+            self.page = *p;
         }
     }
 }
@@ -40,45 +71,81 @@ fn lines(text: &str) -> Vec<String> {
     text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect()
 }
 
-#[cfg(target_os = "macos")]
-fn login_agent() -> std::path::PathBuf {
-    dirs::home_dir().unwrap_or_default().join("Library/LaunchAgents/dev.clipr.plist")
-}
-
-fn login_item_enabled() -> bool {
+/// Start at login, per platform.
+mod login {
     #[cfg(target_os = "macos")]
-    return login_agent().exists();
-    #[cfg(windows)]
-    return crate::platform::login::enabled();
+    fn agent() -> std::path::PathBuf {
+        dirs::home_dir().unwrap_or_default().join("Library/LaunchAgents/dev.clipr.plist")
+    }
+
     #[cfg(target_os = "linux")]
-    false
-}
+    fn autostart() -> std::path::PathBuf {
+        dirs::config_dir().unwrap_or_default().join("autostart/clipr.desktop")
+    }
 
-#[cfg(windows)]
-fn set_login_item(on: bool) -> std::io::Result<()> {
-    crate::platform::login::set(on)
-}
+    /// Linux: whether the Hyprland config starts clipr itself (then the
+    /// switch can't turn that off).
+    #[cfg(target_os = "linux")]
+    pub fn by_compositor() -> bool {
+        let dir = dirs::config_dir().unwrap_or_default().join("hypr");
+        ["autostart.lua", "hyprland.lua", "hyprland.conf"].iter().any(|f| {
+            std::fs::read_to_string(dir.join(f)).is_ok_and(|text| {
+                text.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.starts_with('#') && !l.starts_with("--"))
+                    .any(|l| l.contains("clipr") && (l.contains("launch_on_start") || l.contains("exec-once")))
+            })
+        })
+    }
 
-/// Start at login via a LaunchAgent (the same one install.sh creates).
-#[cfg(target_os = "macos")]
-fn set_login_item(on: bool) -> std::io::Result<()> {
-    let path = login_agent();
-    if !on {
-        return match std::fs::remove_file(&path) {
+    #[cfg(not(target_os = "linux"))]
+    pub fn by_compositor() -> bool {
+        false
+    }
+
+    pub fn enabled() -> bool {
+        #[cfg(target_os = "macos")]
+        return agent().exists();
+        #[cfg(windows)]
+        return crate::platform::login::enabled();
+        #[cfg(target_os = "linux")]
+        return autostart().exists() || by_compositor();
+    }
+
+    #[cfg(not(windows))]
+    fn remove(path: &std::path::Path) -> std::io::Result<()> {
+        match std::fs::remove_file(path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
-        };
+        }
     }
-    // …/clipr.app/Contents/MacOS/clipr → …/clipr.app
-    let exe = std::env::current_exe()?;
-    let app = exe.ancestors().nth(3).unwrap_or(&exe);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+
+    #[cfg(not(windows))]
+    fn write(path: &std::path::Path, text: String) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, text)
     }
-    std::fs::write(
-        &path,
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+
+    #[cfg(windows)]
+    pub fn set(on: bool) -> std::io::Result<()> {
+        crate::platform::login::set(on)
+    }
+
+    /// A LaunchAgent (the same one install.sh creates).
+    #[cfg(target_os = "macos")]
+    pub fn set(on: bool) -> std::io::Result<()> {
+        if !on {
+            return remove(&agent());
+        }
+        // …/clipr.app/Contents/MacOS/clipr → …/clipr.app
+        let exe = std::env::current_exe()?;
+        let app = exe.ancestors().nth(3).unwrap_or(&exe);
+        write(
+            &agent(),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -89,19 +156,131 @@ fn set_login_item(on: bool) -> std::io::Result<()> {
 </dict>
 </plist>
 "#,
-            app.display()
-        ),
-    )
+                app.display()
+            ),
+        )
+    }
+
+    /// An XDG autostart entry (run by uwsm/systemd on Omarchy, and by most desktops).
+    #[cfg(target_os = "linux")]
+    pub fn set(on: bool) -> std::io::Result<()> {
+        if !on {
+            return remove(&autostart());
+        }
+        let exe = std::env::current_exe()?;
+        write(
+            &autostart(),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=clipr\nComment=Clipboard history\nExec={}\nIcon=clipr\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+                exe.display()
+            ),
+        )
+    }
 }
 
-fn section(ui: &mut egui::Ui, t: &Theme, title: &str) {
+// ---------------------------------------------------------------- widgets
+
+/// iOS/macOS-style switch.
+fn switch(ui: &mut egui::Ui, t: &Theme, on: &mut bool) -> egui::Response {
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(36.0, 20.0), Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let k = ui.ctx().animate_bool_responsive(resp.id, *on);
+    let off = if ui.visuals().dark_mode { Color32::from_gray(80) } else { Color32::from_gray(200) };
+    let track = off.lerp_to_gamma(t.accent, k);
+    let alpha = if ui.is_enabled() { 1.0 } else { 0.45 };
+    let p = ui.painter();
+    p.rect_filled(rect, 10.0, track.gamma_multiply(alpha));
+    let x = egui::lerp((rect.left() + 10.0)..=(rect.right() - 10.0), k);
+    p.circle_filled(egui::pos2(x, rect.center().y), 8.0, Color32::WHITE.gamma_multiply(alpha));
+    resp
+}
+
+/// Segmented control, like History / Saved in the picker.
+fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Theme, value: &mut T, options: &[(T, &str)]) -> bool {
+    let font = FontId::proportional(12.5);
+    let widths: Vec<f32> = options
+        .iter()
+        .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), font.clone(), t.text).size().x + 20.0)
+        .collect();
+    let (rect, _) = ui.allocate_exact_size(vec2(widths.iter().sum::<f32>() + 4.0, 24.0), Sense::hover());
+    ui.painter().rect_filled(rect, 7.0, t.field);
+    let mut x = rect.left() + 2.0;
+    let mut changed = false;
+    for ((v, label), w) in options.iter().zip(widths) {
+        let r = egui::Rect::from_min_size(egui::pos2(x, rect.top() + 2.0), vec2(w, rect.height() - 4.0));
+        x += w;
+        let resp = ui.interact(r, ui.id().with(label), Sense::click());
+        let active = *value == *v;
+        if active {
+            ui.painter().rect_filled(r, 5.0, t.accent);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(r, 5.0, t.hover);
+        }
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, *label, font.clone(), if active { t.on_accent } else { t.text });
+        if resp.clicked() && !active {
+            *value = *v;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// A rounded group of rows.
+fn card<R>(ui: &mut egui::Ui, t: &Theme, title: Option<&str>, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if let Some(title) = title {
+        ui.add_space(4.0);
+        ui.label(RichText::new(title).size(12.0).strong().color(t.muted));
+    }
+    let r = egui::Frame::new()
+        .fill(t.field)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(12, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner;
     ui.add_space(10.0);
-    ui.label(RichText::new(title).strong().size(13.0).color(t.muted));
-    ui.add_space(2.0);
+    r
 }
 
-fn hint(ui: &mut egui::Ui, t: &Theme, text: &str) {
+fn divider(ui: &mut egui::Ui, t: &Theme) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, t.border));
+}
+
+/// Label (and optional hint) on the left, control on the right.
+fn row(ui: &mut egui::Ui, t: &Theme, label: &str, hint: Option<&str>, control: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        // Fixed height, so labels centre on the (taller) controls.
+        ui.set_min_height(26.0);
+        match hint {
+            Some(h) => {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(label).size(13.5).color(t.text));
+                    ui.label(RichText::new(h).size(11.5).color(t.muted));
+                });
+            }
+            // A single line is centred on the control.
+            None => {
+                ui.label(RichText::new(label).size(13.5).color(t.text));
+            }
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), control);
+    });
+    ui.add_space(6.0);
+}
+
+fn note(ui: &mut egui::Ui, t: &Theme, text: &str) {
+    ui.add_space(4.0);
     ui.label(RichText::new(text).size(11.5).color(t.muted));
+    ui.add_space(4.0);
 }
 
 impl Picker {
@@ -109,38 +288,36 @@ impl Picker {
         // Title bar.
         ui.horizontal(|ui| {
             ui.label(RichText::new("Settings").size(17.0).strong().color(t.text));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Done").clicked() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let done = egui::Button::new(RichText::new("Done").color(t.on_accent))
+                    .fill(t.accent)
+                    .corner_radius(6.0);
+                if ui.add(done).clicked() {
                     self.leave_settings(ctx);
                 }
                 ui.label(RichText::new("Esc").size(11.5).color(t.muted));
             });
         });
+        ui.add_space(6.0);
+        ui.vertical_centered(|ui| {
+            segmented(ui, t, &mut self.page.page, PAGES);
+        });
+        ui.add_space(6.0);
         if let Some(msg) = &self.page.message {
             ui.label(RichText::new(msg).size(12.0).color(t.accent));
+            ui.add_space(4.0);
         }
-        ui.separator();
 
         let before = self.settings.clone();
-        let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
-        if std::env::var("CLIPR_OPEN").as_deref() == Ok("settings-bottom") {
-            area = area.vertical_scroll_offset(900.0); // development aid
-        }
-        area.show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 6.0;
-            self.general(ui, t);
-            self.storage(ui, t);
-            self.appearance(ui, t);
-            self.ignore(ui, t);
-            self.shortcuts(ui, t);
-            self.updates(ui, ctx, t);
-            ui.add_space(8.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.page.page {
+            Page::General => self.general(ui, t),
+            Page::Storage => self.storage(ui, t),
+            Page::Ignore => self.ignore(ui, t),
+            Page::Shortcuts => self.shortcuts(ui, t),
+            Page::About => self.about(ui, ctx, t),
         });
         if self.settings != before {
-            self.page.message = match self.settings.save() {
-                Ok(()) => None,
-                Err(e) => Some(format!("Couldn't save settings: {e}")),
-            };
+            self.page.message = self.settings.save().err().map(|e| format!("Couldn't save settings: {e}"));
             if self.settings.theme != before.theme {
                 self.apply_settings(ctx);
             }
@@ -148,175 +325,173 @@ impl Picker {
     }
 
     fn general(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        section(ui, t, "GENERAL");
         let s = &mut self.settings;
-        ui.checkbox(&mut s.paste_automatically, "Paste automatically");
-        hint(ui, t, "Off: choosing a clip only copies it; paste it yourself.");
-        ui.checkbox(&mut s.close_on_click_away, "Close when clicking outside the window");
-        ui.horizontal(|ui| {
-            ui.label("Search");
-            ui.radio_value(&mut s.search_mode, SearchMode::Fuzzy, "Fuzzy");
-            ui.radio_value(&mut s.search_mode, SearchMode::Exact, "Exact");
+        card(ui, t, None, |ui| {
+            row(ui, t, "Paste automatically", Some("Off: choosing a clip only copies it"), |ui| {
+                switch(ui, t, &mut s.paste_automatically);
+            });
+            divider(ui, t);
+            row(ui, t, "Close when clicking outside", None, |ui| {
+                switch(ui, t, &mut s.close_on_click_away);
+            });
+            divider(ui, t);
+            row(ui, t, "Search", None, |ui| {
+                segmented(ui, t, &mut s.search_mode, &[(SearchMode::Fuzzy, "Fuzzy"), (SearchMode::Exact, "Exact")]);
+            });
         });
-        #[cfg(any(target_os = "macos", windows))]
-        {
-            let mut on = self.page.login;
-            if ui.checkbox(&mut on, "Open clipr at login").changed() {
-                match set_login_item(on) {
-                    Ok(()) => self.page.login = on,
-                    Err(e) => self.page.message = Some(format!("Couldn't change login item: {e}")),
-                }
+
+        let compositor = login::by_compositor();
+        let hint = compositor.then_some("Started by your Hyprland config");
+        let mut on = self.page.login;
+        let mut toggled = false;
+        card(ui, t, None, |ui| {
+            row(ui, t, "Open clipr at login", hint, |ui| {
+                ui.add_enabled_ui(!compositor, |ui| toggled = switch(ui, t, &mut on).changed());
+            });
+        });
+        if toggled {
+            match login::set(on) {
+                Ok(()) => self.page.login = login::enabled(),
+                Err(e) => self.page.message = Some(format!("Couldn't change login item: {e}")),
             }
         }
-        #[cfg(target_os = "linux")]
-        hint(ui, t, "Autostart and the global shortcut are set in your Hyprland config.");
+
+        let s = &mut self.settings;
+        card(ui, t, Some("APPEARANCE"), |ui| {
+            row(ui, t, "Theme", None, |ui| {
+                segmented(
+                    ui,
+                    t,
+                    &mut s.theme,
+                    &[(ThemeChoice::System, "System"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")],
+                );
+            });
+            divider(ui, t);
+            row(ui, t, "Image preview", None, |ui| {
+                switch(ui, t, &mut s.show_preview);
+            });
+            divider(ui, t);
+            row(ui, t, "1–9 shortcuts on rows", None, |ui| {
+                switch(ui, t, &mut s.show_numbers);
+            });
+            divider(ui, t);
+            row(ui, t, "Shortcut hints at the bottom", None, |ui| {
+                switch(ui, t, &mut s.show_footer);
+            });
+        });
     }
 
     fn storage(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        section(ui, t, "STORAGE");
         let s = &mut self.settings;
-        ui.horizontal(|ui| {
-            ui.label("History size");
-            ui.add(egui::DragValue::new(&mut s.history_size).range(10..=100_000).speed(10));
-            ui.label(RichText::new("clips").color(t.muted));
-        });
-        ui.checkbox(&mut s.save_images, "Save images");
-        ui.add_enabled_ui(s.save_images, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Keep up to");
-                ui.add(egui::DragValue::new(&mut s.image_limit).range(0..=10_000));
-                ui.label(RichText::new("images").color(t.muted));
+        card(ui, t, None, |ui| {
+            row(ui, t, "History size", Some("Clips kept, besides pinned & saved"), |ui| {
+                ui.add(egui::DragValue::new(&mut s.history_size).range(10..=100_000).speed(10));
+            });
+            divider(ui, t);
+            row(ui, t, "Save images", None, |ui| {
+                switch(ui, t, &mut s.save_images);
+            });
+            divider(ui, t);
+            let enabled = s.save_images;
+            row(ui, t, "Images kept", None, |ui| {
+                ui.add_enabled(enabled, egui::DragValue::new(&mut s.image_limit).range(0..=10_000));
             });
         });
-        hint(ui, t, "Pinned and saved clips are never removed automatically.");
-        let label = if self.page.confirm_clear {
-            "Click again to clear the history"
-        } else {
-            "Clear history…"
-        };
-        if ui.button(label).clicked() {
-            if self.page.confirm_clear {
-                self.page.message = Some(match self.db.clear() {
-                    Ok(n) => format!("Cleared {n} clips (kept pinned & saved)"),
-                    Err(e) => format!("Couldn't clear: {e}"),
-                });
-                self.page.confirm_clear = false;
-            } else {
-                self.page.confirm_clear = true;
-            }
-        }
-    }
-
-    fn appearance(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        section(ui, t, "APPEARANCE");
-        let s = &mut self.settings;
-        ui.horizontal(|ui| {
-            ui.label("Theme");
-            ui.radio_value(&mut s.theme, ThemeChoice::System, "System");
-            ui.radio_value(&mut s.theme, ThemeChoice::Light, "Light");
-            ui.radio_value(&mut s.theme, ThemeChoice::Dark, "Dark");
+        card(ui, t, None, |ui| {
+            row(
+                ui,
+                t,
+                "Clear history after restart",
+                Some("After the computer restarts or shuts down"),
+                |ui| {
+                    switch(ui, t, &mut s.clear_on_restart);
+                },
+            );
         });
-        ui.checkbox(&mut s.show_preview, "Show image preview");
-        ui.checkbox(&mut s.show_numbers, "Show 1–9 shortcuts on rows");
-        ui.checkbox(&mut s.show_footer, "Show shortcut hints at the bottom");
+        let label = if self.page.confirm_clear { "Click again to clear the history" } else { "Clear history now…" };
+        card(ui, t, None, |ui| {
+            row(ui, t, "Pinned and saved clips are always kept", None, |ui| {
+                let button = egui::Button::new(RichText::new(label).color(if self.page.confirm_clear {
+                    Color32::WHITE
+                } else {
+                    RED
+                }))
+                .fill(if self.page.confirm_clear { RED } else { Color32::TRANSPARENT });
+                if ui.add(button).clicked() {
+                    if self.page.confirm_clear {
+                        self.page.message = Some(match self.db.clear() {
+                            Ok(n) => format!("Cleared {n} clips (kept pinned & saved)"),
+                            Err(e) => format!("Couldn't clear: {e}"),
+                        });
+                        self.page.confirm_clear = false;
+                    } else {
+                        self.page.confirm_clear = true;
+                    }
+                }
+            });
+        });
     }
 
     fn ignore(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        section(ui, t, "IGNORE");
-        ui.label("Apps (one per line)");
-        hint(
-            ui,
-            t,
-            if cfg!(target_os = "macos") {
-                "App name or bundle id, e.g. 1Password or com.bitwarden.desktop"
-            } else if cfg!(windows) {
-                "Program name, e.g. 1Password or KeePass.exe"
-            } else {
-                "Window class, e.g. Bitwarden (see `hyprctl activewindow`)"
-            },
-        );
-        let apps = ui.add(TextEdit::multiline(&mut self.page.apps).desired_rows(2).desired_width(f32::INFINITY));
-        if apps.changed() {
-            self.settings.ignore_apps = lines(&self.page.apps);
-        }
-        ui.add_space(4.0);
-        ui.label("Text matching a regular expression (one per line)");
-        hint(ui, t, r"e.g. ^\d{6}$ skips 6-digit codes");
-        let pats = ui.add(TextEdit::multiline(&mut self.page.patterns).desired_rows(2).desired_width(f32::INFINITY));
-        if pats.changed() {
-            self.settings.ignore_patterns = lines(&self.page.patterns);
-        }
-        for p in &self.settings.ignore_patterns {
-            if let Err(e) = regex_lite::Regex::new(p) {
-                let first = e.to_string().lines().last().unwrap_or("").to_owned();
-                ui.label(RichText::new(format!("Invalid: {p}  ({first})")).size(11.5).color(egui::Color32::from_rgb(220, 80, 70)));
+        let example = if cfg!(target_os = "macos") {
+            "App name or bundle id, one per line, e.g. 1Password"
+        } else if cfg!(windows) {
+            "Program name, one per line, e.g. KeePass.exe"
+        } else {
+            "Window class, one per line, e.g. Bitwarden (see hyprctl activewindow)"
+        };
+        card(ui, t, Some("APPS"), |ui| {
+            note(ui, t, &format!("Copies made in these apps are never saved. {example}"));
+            let edit = TextEdit::multiline(&mut self.page.apps)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .hint_text("1Password");
+            if ui.add(edit).changed() {
+                self.settings.ignore_apps = lines(&self.page.apps);
             }
-        }
-    }
-
-    fn updates(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Theme) {
-        use crate::update::{Status, current};
-        section(ui, t, "UPDATES");
-        let status = self.updater.status();
-        ui.horizontal(|ui| {
-            ui.label(format!("clipr {}", current()));
-            let busy = matches!(status, Status::Checking | Status::Updating);
-            if ui.add_enabled(!busy, egui::Button::new("Check for updates")).clicked() {
-                let ctx = ctx.clone();
-                self.updater.check(move || ctx.request_repaint());
-            }
+            ui.add_space(6.0);
         });
-        match &status {
-            Status::Idle => {}
-            Status::Checking => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Checking…");
-                });
+        card(ui, t, Some("TEXT (REGULAR EXPRESSIONS)"), |ui| {
+            note(ui, t, r"Text matching any line is never saved, e.g. ^\d{6}$ skips 6-digit codes");
+            let edit = TextEdit::multiline(&mut self.page.patterns)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .code_editor()
+                .hint_text(r"^\d{6}$");
+            if ui.add(edit).changed() {
+                self.settings.ignore_patterns = lines(&self.page.patterns);
             }
-            Status::UpToDate => hint(ui, t, "You have the latest version."),
-            Status::Available(v) => {
-                ui.label(RichText::new(format!("Version {v} is available.")).color(t.accent));
-                if cfg!(target_os = "macos") {
-                    hint(ui, t, "After updating, macOS asks again for Accessibility: allow clipr.");
-                }
-                if ui.button(format!("Update to {v} now")).clicked() {
-                    self.updater.install();
+            for p in &self.settings.ignore_patterns {
+                if let Err(e) = regex_lite::Regex::new(p) {
+                    let why = e.to_string().lines().last().unwrap_or("").to_owned();
+                    ui.label(RichText::new(format!("Invalid: {p}  ({why})")).size(11.5).color(RED));
                 }
             }
-            Status::Updating => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Installing… clipr restarts by itself in a few seconds.");
-                });
-            }
-            Status::Failed(e) => {
-                ui.label(RichText::new(format!("Update check failed: {e}")).color(egui::Color32::from_rgb(220, 80, 70)));
-            }
-        }
+            ui.add_space(6.0);
+        });
+        note(ui, t, "Copies that password managers mark as secret are always skipped.");
     }
 
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        section(ui, t, "KEYBOARD SHORTCUTS");
-        hint(ui, t, "Mod = ⌘ on macOS, Ctrl on Windows/Linux. Several shortcuts: separate with commas.");
+        note(ui, t, "Mod = ⌘ on macOS, Ctrl on Windows/Linux. Several shortcuts: separate with commas.");
         let mut changed = false;
-        egui::Grid::new("shortcuts").num_columns(2).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
-            for (i, (name, label)) in keys::EDITABLE.iter().enumerate() {
-                if *name == "hotkey" && cfg!(target_os = "linux") {
-                    continue;
+        card(ui, t, None, |ui| {
+            let editable: Vec<usize> = (0..keys::EDITABLE.len())
+                .filter(|&i| !(keys::EDITABLE[i].0 == "hotkey" && cfg!(target_os = "linux")))
+                .collect();
+            for (n, &i) in editable.iter().enumerate() {
+                let (name, label) = keys::EDITABLE[i];
+                if n > 0 {
+                    divider(ui, t);
                 }
-                ui.label(*label);
-                ui.vertical(|ui| {
-                    let edit = ui.add(TextEdit::singleline(&mut self.page.keys[i].1).desired_width(190.0));
-                    if edit.changed() {
+                let error = self.page.key_errors[i].clone();
+                row(ui, t, label, error.as_deref(), |ui| {
+                    let edit = TextEdit::singleline(&mut self.page.keys[i].1).desired_width(170.0);
+                    if ui.add(edit).changed() {
                         self.page.key_errors[i] = keys::validate(name, self.page.keys[i].1.trim()).err();
                         changed = true;
                     }
-                    if let Some(e) = &self.page.key_errors[i] {
-                        ui.label(RichText::new(e).size(11.0).color(egui::Color32::from_rgb(220, 80, 70)));
-                    }
                 });
-                ui.end_row();
             }
         });
         if changed && self.page.key_errors.iter().all(Option::is_none) {
@@ -325,16 +500,72 @@ impl Picker {
             self.page.message = keys::save(&values).err().map(|e| format!("Couldn't save shortcuts: {e}"));
         }
         ui.horizontal(|ui| {
-            if ui.button("Reset shortcuts").clicked() {
+            if ui.button("Reset to defaults").clicked() {
                 let _ = std::fs::remove_file(keys::config_path());
                 self.keys = Keymap::load();
+                let page = self.page.page;
                 self.page = Draft::new(&self.settings, &self.keys);
+                self.page.page = page;
                 self.page.message = Some("Shortcuts reset to defaults".into());
             }
             if ui.button("Open keys.conf").clicked() {
                 self.open_file(keys::ensure_config());
                 self.page.message = self.status.take();
             }
+        });
+    }
+
+    fn about(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Theme) {
+        use crate::update::{Status, current};
+        let status = self.updater.status();
+        card(ui, t, None, |ui| {
+            row(ui, t, &format!("clipr {}", current()), Some("Keyboard-driven clipboard history"), |ui| {
+                let busy = matches!(status, Status::Checking | Status::Updating);
+                if ui.add_enabled(!busy, egui::Button::new("Check for updates")).clicked() {
+                    let ctx = ctx.clone();
+                    self.updater.check(move || ctx.request_repaint());
+                }
+            });
+            match &status {
+                Status::Idle => {}
+                Status::Checking => {
+                    divider(ui, t);
+                    row(ui, t, "Checking…", None, |ui| {
+                        ui.spinner();
+                    });
+                }
+                Status::UpToDate => {
+                    divider(ui, t);
+                    row(ui, t, "You have the latest version", None, |_| {});
+                }
+                Status::Available(v) => {
+                    divider(ui, t);
+                    let hint = cfg!(target_os = "macos").then_some("macOS will ask again for Accessibility");
+                    row(ui, t, &format!("Version {v} is available"), hint, |ui| {
+                        let b = egui::Button::new(RichText::new("Update now").color(t.on_accent)).fill(t.accent);
+                        if ui.add(b).clicked() {
+                            self.updater.install();
+                        }
+                    });
+                }
+                Status::Updating => {
+                    divider(ui, t);
+                    row(ui, t, "Installing… clipr restarts by itself", None, |ui| {
+                        ui.spinner();
+                    });
+                }
+                Status::Failed(e) => {
+                    divider(ui, t);
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(format!("Update check failed: {e}")).size(12.0).color(RED));
+                    ui.add_space(6.0);
+                }
+            }
+        });
+        card(ui, t, None, |ui| {
+            row(ui, t, "Source code", None, |ui| {
+                ui.hyperlink_to("github.com/Mudales/clipr", "https://github.com/Mudales/clipr");
+            });
         });
     }
 }

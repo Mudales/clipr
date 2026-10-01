@@ -42,7 +42,7 @@ Defaults (⌘ on macOS, Ctrl on Windows and Linux). All of them can be changed, 
 | ⌘/Ctrl + S | save / unsave |
 | ⌘/Ctrl + P | pin / unpin (pinned stay at the top of History) |
 | Delete, ⌘/Ctrl + Backspace | delete (with a multi-selection: all selected except pinned & saved) |
-| ⌘/Ctrl + A | select all shown clips (again to unselect), then Delete clears the history |
+| ⌘/Ctrl + A | select all shown clips (again to unselect), then Delete clears the history (asks first; pinned & saved are kept) |
 | Shift + ↑ ↓ | extend the selection; copy/paste then joins the selected clips line by line |
 | Ctrl + Tab, Ctrl + Shift + Tab | switch History ⇄ Saved |
 | ⌘/Ctrl + , or ⚙ | Settings |
@@ -58,9 +58,9 @@ Open with ⚙ (next to the tabs) or ⌘/Ctrl + ,. Changes are saved immediately 
 `~/.config/clipr/settings.conf`.
 
 - **General:** paste automatically (off = choosing a clip only copies it), close when
-  clicking outside, fuzzy or exact search, open at login (macOS)
-- **Storage:** history size, save images and how many to keep, clear history
-  (keeps pinned & saved)
+  clicking outside, fuzzy or exact search, open at login (macOS, Windows, Linux)
+- **Storage:** history size, save images and how many to keep, clear history now or
+  automatically after the computer restarts (always keeps pinned & saved)
 - **Appearance:** system / light / dark theme, image preview, 1–9 hints, footer hints
 - **Ignore:** apps whose copies are never saved (app name or bundle id on macOS,
   window class on Linux) and regular expressions for text that is never saved

@@ -27,7 +27,14 @@ pub fn run() -> Result<()> {
         bail!("clipr is already running");
     }
     // Create the schema once up front so the threads below don't race on it.
-    drop(Db::open()?);
+    let db = Db::open()?;
+    if crate::boot::is_new_boot() && Settings::load().clear_on_restart {
+        match db.clear() {
+            Ok(n) => eprintln!("clipr: cleared {n} clips after restart (kept pinned & saved)"),
+            Err(e) => eprintln!("clipr: couldn't clear after restart: {e}"),
+        }
+    }
+    drop(db);
     let listener = ipc::listen()?;
 
     thread::spawn(|| log_err("watcher", watch_clipboard()));

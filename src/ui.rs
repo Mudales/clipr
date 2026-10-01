@@ -108,6 +108,8 @@ struct Picker {
     view: View,
     /// Edits in progress on the Settings page.
     page: settings_page::Draft,
+    /// Waiting for "Delete N clips?" to be confirmed.
+    confirm_delete: bool,
     /// Multi-selection (⌘A / Shift+↑↓), by clip id.
     marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
@@ -148,8 +150,16 @@ pub fn run(mode: Mode) -> Result<()> {
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
-            if std::env::var("CLIPR_OPEN").is_ok_and(|v| v.starts_with("settings")) {
-                picker.enter_settings();
+            // Development aid: CLIPR_OPEN=confirm shows the delete dialog.
+            if std::env::var("CLIPR_OPEN").as_deref() == Ok("confirm") {
+                picker.marked = picker.items.iter().map(|it| it.clip.id).collect();
+                picker.request_delete_marked();
+            }
+            if let Ok(v) = std::env::var("CLIPR_OPEN") {
+                if let Some(page) = v.strip_prefix("settings") {
+                    picker.enter_settings();
+                    picker.page.open(page.trim_start_matches('-'));
+                }
             }
             Ok(Box::new(picker))
         }),
@@ -318,6 +328,7 @@ impl Picker {
             keys: Keymap::load(),
             settings: Settings::load(),
             updater: Default::default(),
+            confirm_delete: false,
             view: View::List,
             page: settings_page::Draft::default(),
         }
@@ -493,14 +504,73 @@ impl Picker {
         }
     }
 
-    /// Deletes the marked clips, except pinned and saved ones.
-    fn delete_marked(&mut self) {
-        let doomed: Vec<i64> = self
-            .items
+    /// Marked clips that a delete would remove (pinned and saved are kept).
+    fn deletable_marked(&self) -> Vec<i64> {
+        self.items
             .iter()
             .filter(|it| self.marked.contains(&it.clip.id) && !it.clip.pinned && !it.clip.saved)
             .map(|it| it.clip.id)
-            .collect();
+            .collect()
+    }
+
+    /// Delete with a multi-selection: ask first (see `confirm_dialog`).
+    fn request_delete_marked(&mut self) {
+        if self.deletable_marked().is_empty() {
+            self.status = Some("Nothing to delete: pinned and saved clips are kept".into());
+        } else {
+            self.confirm_delete = true;
+        }
+    }
+
+    /// "Delete N clips?" with Cancel / Delete (Esc / Enter).
+    fn confirm_dialog(&mut self, ctx: &egui::Context, t: &Theme) {
+        let doomed = self.deletable_marked().len();
+        let kept = self.marked.len() - doomed;
+        let (mut yes, mut no) = ctx.input_mut(|i| {
+            (i.consume_key(Modifiers::NONE, Key::Enter), i.consume_key(Modifiers::NONE, Key::Escape))
+        });
+        let id = egui::Id::new("confirm_delete");
+        let area = egui::Modal::default_area(id).order(egui::Order::Tooltip).fade_in(false);
+        let frame = egui::Frame::new()
+            .fill(t.bg.to_opaque())
+            .stroke(Stroke::new(1.0, t.border))
+            .corner_radius(12.0)
+            .inner_margin(16.0);
+        let modal = egui::Modal::new(id).area(area).frame(frame).show(ctx, |ui| {
+            ui.set_width(300.0);
+            ui.label(egui::RichText::new(format!("Delete {doomed} clips?")).size(16.0).strong());
+            ui.add_space(4.0);
+            ui.label(match kept {
+                0 => "Pinned and saved clips are kept.".to_owned(),
+                k => format!("{k} pinned/saved clips in the selection are kept."),
+            });
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let delete = egui::Button::new(egui::RichText::new("Delete").color(Color32::WHITE))
+                    .fill(Color32::from_rgb(220, 70, 60));
+                if ui.add(delete).clicked() {
+                    yes = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    no = true;
+                }
+                ui.label(egui::RichText::new("↩ / Esc").size(11.0).color(t.muted));
+            });
+        });
+        if modal.backdrop_response.clicked() {
+            no = true;
+        }
+        if yes {
+            self.confirm_delete = false;
+            self.delete_marked();
+        } else if no {
+            self.confirm_delete = false;
+        }
+    }
+
+    /// Deletes the marked clips, except pinned and saved ones.
+    fn delete_marked(&mut self) {
+        let doomed = self.deletable_marked();
         let kept = self.marked.len() - doomed.len();
         for id in &doomed {
             if let Err(e) = self.db.delete(*id) {
@@ -535,6 +605,9 @@ impl Picker {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        if self.confirm_delete {
+            return; // the dialog handles Enter / Esc
+        }
         if self.view == View::Settings {
             // Let the settings fields have every key except Esc (= back).
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -612,7 +685,7 @@ impl Picker {
                 Action::Type => self.choose(ctx, "TYPE"),
                 Action::Pin => self.edit_current(|db, c| db.set_pinned(c.id, !c.pinned)),
                 Action::Save => self.edit_current(|db, c| db.set_saved(c.id, !c.saved)),
-                Action::Delete if !self.marked.is_empty() => self.delete_marked(),
+                Action::Delete if !self.marked.is_empty() => self.request_delete_marked(),
                 Action::Delete => self.edit_current(|db, c| db.delete(c.id)),
                 Action::SelectAll => {
                     let all: HashSet<i64> = self.filtered.iter().map(|&i| self.items[i].clip.id).collect();
@@ -999,7 +1072,7 @@ impl Picker {
 fn debug_screenshot(ctx: &egui::Context) {
     let Some(path) = std::env::var_os("CLIPR_SCREENSHOT") else { return };
     let frame = ctx.cumulative_pass_nr();
-    if frame == 5 {
+    if frame == 30 {  // after fade-in animations
         ctx.send_viewport_cmd(ViewportCommand::Screenshot(Default::default()));
     }
     ctx.request_repaint();
@@ -1084,6 +1157,10 @@ impl eframe::App for Picker {
                 if footer_h > 0.0 {
                     ui.add_space(4.0);
                     self.footer(ui, &t);
+                }
+                // Last, so it's drawn over the list.
+                if self.confirm_delete {
+                    self.confirm_dialog(&ctx, &t);
                 }
             });
     }
