@@ -114,11 +114,8 @@ impl Updater {
         });
         if result_ok(&self.status()) {
             let _ = std::fs::write(updated_marker(), current());
-            // Give the installer a moment to start, then get out of its way.
-            std::thread::spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                std::process::exit(0);
-            });
+            // Get out of the installer's way.
+            quit_soon();
         }
     }
 }
@@ -128,11 +125,25 @@ impl Updater {
 /// helper doesn't have to find it). Also finishes an update whose restart got lost.
 pub fn restart() -> std::io::Result<()> {
     spawn_restart_helper()?;
+    quit_soon();
+    Ok(())
+}
+
+/// Quits this clipr: the window closes normally from the UI thread (calling
+/// exit() from another thread can leave a Wayland window hung half-way,
+/// which Hyprland reports as "not responding"). If that hasn't happened
+/// within a few seconds, leave immediately without running any cleanup.
+pub(crate) fn quit_soon() {
+    crate::ui::request_quit();
     std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        #[cfg(unix)]
+        unsafe {
+            libc::_exit(0);
+        }
+        #[cfg(windows)]
         std::process::exit(0);
     });
-    Ok(())
 }
 
 fn spawn_restart_helper() -> std::io::Result<()> {

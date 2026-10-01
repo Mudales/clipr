@@ -29,8 +29,10 @@ objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 winit = { version = "0.30", default-features = false }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 wl-clipboard-rs = "0.9"
 
 [target."cfg(windows)".dependencies]

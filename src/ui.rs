@@ -54,6 +54,16 @@ pub enum Mode {
 }
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Close the window and leave the event loop (so the process exits normally).
+/// Safe to call from any thread; does nothing if there's no window.
+pub fn request_quit() {
+    QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    if let Some(ctx) = CONTEXT.get() {
+        ctx.request_repaint();
+    }
+}
 static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
 
 /// Show/hide the resident picker. Safe to call from any thread.
@@ -160,6 +170,10 @@ pub fn run(mode: Mode) -> Result<()> {
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
+            // Development aid: CLIPR_OPEN=quit quits right away (tests quit_soon).
+            if std::env::var("CLIPR_OPEN").as_deref() == Ok("quit") {
+                crate::update::quit_soon();
+            }
             // Development aid: CLIPR_SELECT=n selects row n.
             if let Some(n) = std::env::var("CLIPR_SELECT").ok().and_then(|v| v.parse().ok()) {
                 picker.selected = n;
@@ -1262,6 +1276,10 @@ fn debug_screenshot(ctx: &egui::Context) {
 impl eframe::App for Picker {
     /// Keeps running while the resident window is hidden.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if QUIT_REQUESTED.load(Ordering::SeqCst) {
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+            return;
+        }
         if TOGGLE_REQUESTED.swap(false, Ordering::SeqCst) {
             if self.visible {
                 self.close(ctx, true);
