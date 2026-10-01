@@ -40,6 +40,11 @@ pub struct Settings {
     pub ignore_apps: Vec<String>,
     /// Text matching any of these regular expressions is never saved.
     pub ignore_patterns: Vec<String>,
+    /// Linux: when the app you copied from closes, put the clip back (macOS
+    /// and Windows keep the clipboard themselves).
+    pub keep_clipboard: bool,
+    /// Right-click → Actions / Mod+K.
+    pub actions: Vec<crate::actions::ClipAction>,
 }
 
 impl Default for Settings {
@@ -60,6 +65,8 @@ impl Default for Settings {
             show_footer: true,
             ignore_apps: Vec::new(),
             ignore_patterns: Vec::new(),
+            keep_clipboard: true,
+            actions: crate::actions::defaults(),
         }
     }
 }
@@ -80,6 +87,10 @@ impl Settings {
     pub fn load() -> Self {
         let mut s = Self::default();
         let Ok(text) = std::fs::read_to_string(path()) else { return s };
+        // Once the file lists actions (even "action =" for none), it replaces the defaults.
+        if text.lines().any(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == "action")) {
+            s.actions.clear();
+        }
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') {
@@ -110,6 +121,8 @@ impl Settings {
                 "show_footer" => s.show_footer = b.unwrap_or(s.show_footer),
                 "ignore_app" if !value.is_empty() => s.ignore_apps.push(value.to_owned()),
                 "ignore_pattern" if !value.is_empty() => s.ignore_patterns.push(value.to_owned()),
+                "keep_clipboard" => s.keep_clipboard = b.unwrap_or(s.keep_clipboard),
+                "action" => s.actions.extend(crate::actions::ClipAction::from_line(value)),
                 _ => {}
             }
         }
@@ -146,6 +159,13 @@ impl Settings {
         }
         for pattern in &self.ignore_patterns {
             kv("ignore_pattern", pattern.clone());
+        }
+        kv("keep_clipboard", self.keep_clipboard.to_string());
+        if self.actions.is_empty() {
+            kv("action", String::new()); // none (not the defaults)
+        }
+        for action in &self.actions {
+            kv("action", action.to_line());
         }
         let path = path();
         if let Some(dir) = path.parent() {

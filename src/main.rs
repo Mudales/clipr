@@ -1,6 +1,7 @@
 // No console window when started normally on Windows (see `main`).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod actions;
 mod boot;
 mod daemon;
 mod db;

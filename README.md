@@ -45,6 +45,7 @@ Defaults (⌘ on macOS, Ctrl on Windows and Linux). All of them can be changed, 
 | ⌘/Ctrl + A | select all shown clips (again to unselect), then Delete clears the history (asks first; pinned & saved are kept) |
 | Shift + ↑ ↓ | extend the selection; copy/paste then joins the selected clips line by line |
 | Ctrl + Tab, Ctrl + Shift + Tab | switch History ⇄ Saved |
+| ⌘/Ctrl + K | Actions menu (run a command on the clip) |
 | ⌘/Ctrl + , or ⚙ | Settings |
 | right-click a clip | menu with every action |
 | Esc | clear the selection, or close |
@@ -64,6 +65,9 @@ Open with ⚙ (next to the tabs) or ⌘/Ctrl + ,. Changes are saved immediately 
 - **Appearance:** system / light / dark theme, image preview, 1–9 hints, footer hints
 - **Ignore:** apps whose copies are never saved (app name or bundle id on macOS,
   window class on Linux) and regular expressions for text that is never saved
+- **Actions:** commands to run on a clip (⌘/Ctrl+K or right-click → Actions), then paste
+  or copy the result, or just run them. Built-ins: open link, UPPERCASE, lowercase, trim,
+  join lines; or any shell command (the clip on stdin, the result on stdout)
 - **Keyboard shortcuts:** edit every shortcut; invalid entries are flagged and not saved
 - **Updates:** check GitHub for a newer version and install it in place (also `clipr update`)
 

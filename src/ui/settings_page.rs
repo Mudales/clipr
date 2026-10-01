@@ -15,6 +15,7 @@ enum Page {
     General,
     Storage,
     Ignore,
+    Actions,
     Shortcuts,
     About,
 }
@@ -23,6 +24,7 @@ const PAGES: &[(Page, &str)] = &[
     (Page::General, "General"),
     (Page::Storage, "Storage"),
     (Page::Ignore, "Ignore"),
+    (Page::Actions, "Actions"),
     (Page::Shortcuts, "Shortcuts"),
     (Page::About, "About"),
 ];
@@ -313,6 +315,7 @@ impl Picker {
             Page::General => self.general(ui, t),
             Page::Storage => self.storage(ui, t),
             Page::Ignore => self.ignore(ui, t),
+            Page::Actions => self.actions(ui, t),
             Page::Shortcuts => self.shortcuts(ui, t),
             Page::About => self.about(ui, ctx, t),
         });
@@ -334,6 +337,13 @@ impl Picker {
             row(ui, t, "Close when clicking outside", None, |ui| {
                 switch(ui, t, &mut s.close_on_click_away);
             });
+            #[cfg(target_os = "linux")]
+            {
+                divider(ui, t);
+                row(ui, t, "Keep clipboard when an app closes", Some("Puts the last clip back (Wayland empties it)"), |ui| {
+                    switch(ui, t, &mut s.keep_clipboard);
+                });
+            }
             divider(ui, t);
             row(ui, t, "Search", None, |ui| {
                 segmented(ui, t, &mut s.search_mode, &[(SearchMode::Fuzzy, "Fuzzy"), (SearchMode::Exact, "Exact")]);
@@ -470,6 +480,65 @@ impl Picker {
             ui.add_space(6.0);
         });
         note(ui, t, "Copies that password managers mark as secret are always skipped.");
+    }
+
+    fn actions(&mut self, ui: &mut egui::Ui, t: &Theme) {
+        use crate::actions::{BUILTINS, ClipAction, Then};
+        let key = self.keys.label(keys::Action::Actions).unwrap_or_else(|| "right-click".into());
+        note(ui, t, &format!("Run on the selected clip with {key} or right-click → Actions."));
+        let mut remove = None;
+        for (i, action) in self.settings.actions.iter_mut().enumerate() {
+            card(ui, t, None, |ui| {
+                row(ui, t, "Name", None, |ui| {
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                    ui.add(TextEdit::singleline(&mut action.name).desired_width(170.0));
+                });
+                divider(ui, t);
+                row(ui, t, "Then", None, |ui| {
+                    segmented(
+                        ui,
+                        t,
+                        &mut action.then,
+                        &[(Then::Paste, "Paste result"), (Then::Copy, "Copy result"), (Then::Run, "Just run")],
+                    );
+                });
+                divider(ui, t);
+                ui.add_space(6.0);
+                ui.add(
+                    TextEdit::singleline(&mut action.command)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .hint_text("shell command, e.g. tr a-z A-Z"),
+                );
+                ui.add_space(6.0);
+            });
+        }
+        if let Some(i) = remove {
+            self.settings.actions.remove(i);
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Add action").clicked() {
+                self.settings.actions.push(ClipAction {
+                    name: "New action".into(),
+                    then: Then::Paste,
+                    command: String::new(),
+                });
+            }
+            if ui.button("Reset to defaults").clicked() {
+                self.settings.actions = crate::actions::defaults();
+            }
+        });
+        ui.add_space(8.0);
+        let shell = if cfg!(windows) { "cmd /C" } else { "sh -c" };
+        note(
+            ui,
+            t,
+            &format!("A command runs with {shell}: the clip arrives on standard input and what it prints is the result."),
+        );
+        let builtins: Vec<String> = BUILTINS.iter().map(|(n, what)| format!("builtin:{n} ({what})")).collect();
+        note(ui, t, &format!("Built-in: {}", builtins.join(", ")));
     }
 
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Theme) {

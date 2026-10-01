@@ -65,6 +65,13 @@ pub fn request_toggle() {
     }
 }
 
+/// A right-click menu entry.
+#[derive(Clone, Copy)]
+enum MenuChoice {
+    Key(Action),
+    ClipAction(usize),
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     List,
@@ -110,6 +117,8 @@ struct Picker {
     page: settings_page::Draft,
     /// Waiting for "Delete N clips?" to be confirmed.
     confirm_delete: bool,
+    /// The Actions menu (Mod+K) is open, with this entry highlighted.
+    actions_menu: Option<usize>,
     /// Multi-selection (⌘A / Shift+↑↓), by clip id.
     marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
@@ -150,6 +159,11 @@ pub fn run(mode: Mode) -> Result<()> {
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
+            // Development aid: CLIPR_OPEN=actions opens the Actions menu.
+            if std::env::var("CLIPR_OPEN").as_deref() == Ok("actions") {
+                picker.selected = 2;
+                picker.open_actions_menu();
+            }
             // Development aid: CLIPR_OPEN=confirm shows the delete dialog.
             if std::env::var("CLIPR_OPEN").as_deref() == Ok("confirm") {
                 picker.marked = picker.items.iter().map(|it| it.clip.id).collect();
@@ -329,6 +343,7 @@ impl Picker {
             settings: Settings::load(),
             updater: Default::default(),
             confirm_delete: false,
+            actions_menu: None,
             view: View::List,
             page: settings_page::Draft::default(),
         }
@@ -504,6 +519,111 @@ impl Picker {
         }
     }
 
+    fn open_actions_menu(&mut self) {
+        if self.settings.actions.is_empty() {
+            self.status = Some("No actions yet: add some in Settings → Actions".into());
+        } else if self.current().is_some_and(|c| c.is_image) {
+            self.status = Some("Actions work on text clips".into());
+        } else if self.current().is_some() {
+            self.actions_menu = Some(0);
+        }
+    }
+
+    /// Runs action `n` on the selected clip(s) in the daemon, then closes.
+    fn run_clip_action(&mut self, ctx: &egui::Context, n: usize) {
+        self.actions_menu = None;
+        let ids: Vec<String> = self.target_ids().iter().map(i64::to_string).collect();
+        if ids.is_empty() {
+            return;
+        }
+        match ipc::send(&format!("ACTION {n} {}", ids.join(","))) {
+            Ok(()) => self.close(ctx, false),
+            Err(_) => self.status = Some("clipr daemon is not running — start it with `clipr`".into()),
+        }
+    }
+
+    fn actions_menu_keys(&mut self, ctx: &egui::Context, highlight: usize) {
+        let count = self.settings.actions.len();
+        let mut run = None;
+        ctx.input_mut(|i| {
+            if i.consume_key(Modifiers::NONE, Key::Escape) {
+                self.actions_menu = None;
+            }
+            if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                self.actions_menu = Some((highlight + 1) % count);
+            }
+            if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                self.actions_menu = Some((highlight + count - 1) % count);
+            }
+            if i.consume_key(Modifiers::NONE, Key::Enter) {
+                run = Some(highlight);
+            }
+            let digits = [
+                Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5,
+                Key::Num6, Key::Num7, Key::Num8, Key::Num9,
+            ];
+            for (n, key) in digits.into_iter().enumerate() {
+                if n < count && i.consume_key(Modifiers::NONE, key) {
+                    run = Some(n);
+                }
+            }
+            // Keep the search box from seeing typed text while the menu is open.
+            i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
+        });
+        if let Some(n) = run {
+            self.run_clip_action(ctx, n);
+        }
+    }
+
+    /// The Actions menu, floating next to the selected row.
+    fn actions_menu_ui(&mut self, ctx: &egui::Context, t: &Theme, list: egui::Rect) {
+        let Some(highlight) = self.actions_menu else { return };
+        let row_y = list.top() + self.selected as f32 * ROW_H - self.scroll_offset;
+        let below = row_y + ROW_H + 4.0;
+        let height = self.settings.actions.len() as f32 * 26.0 + 34.0;
+        let y = if below + height > list.bottom() { (row_y - height - 4.0).max(list.top()) } else { below };
+        let mut run = None;
+        egui::Area::new(egui::Id::new("actions_menu"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pos2(list.right() - 250.0, y))
+            .fade_in(false)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(t.bg.to_opaque())
+                    .stroke(Stroke::new(1.0, t.border))
+                    .corner_radius(10.0)
+                    .inner_margin(6.0)
+                    .show(ui, |ui| {
+                        ui.set_width(236.0);
+                        ui.label(egui::RichText::new("Actions").size(11.5).color(t.muted));
+                        for (n, action) in self.settings.actions.iter().enumerate() {
+                            let (rect, resp) = ui.allocate_exact_size(vec2(236.0, 24.0), Sense::click());
+                            let on = n == highlight || resp.hovered();
+                            if on {
+                                ui.painter().rect_filled(rect, 6.0, t.accent);
+                            }
+                            let fg = if on { t.on_accent } else { t.text };
+                            let dim = if on { t.on_accent } else { t.muted };
+                            let font = FontId::proportional(13.0);
+                            ui.painter().text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, &action.name, font, fg);
+                            let tag = match action.then {
+                                crate::actions::Then::Paste => "paste",
+                                crate::actions::Then::Copy => "copy",
+                                crate::actions::Then::Run => "run",
+                            };
+                            let hint = if n < 9 { format!("{tag}   {}", n + 1) } else { tag.to_owned() };
+                            ui.painter().text(rect.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, hint, FontId::proportional(11.5), dim);
+                            if resp.clicked() {
+                                run = Some(n);
+                            }
+                        }
+                    });
+            });
+        if let Some(n) = run {
+            self.run_clip_action(ctx, n);
+        }
+    }
+
     /// Marked clips that a delete would remove (pinned and saved are kept).
     fn deletable_marked(&self) -> Vec<i64> {
         self.items
@@ -608,6 +728,10 @@ impl Picker {
         if self.confirm_delete {
             return; // the dialog handles Enter / Esc
         }
+        if let Some(highlight) = self.actions_menu {
+            self.actions_menu_keys(ctx, highlight);
+            return;
+        }
         if self.view == View::Settings {
             // Let the settings fields have every key except Esc (= back).
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -695,6 +819,7 @@ impl Picker {
                 Action::Close if !self.marked.is_empty() => self.marked.clear(),
                 Action::Close => self.close(ctx, true),
                 Action::Settings => self.enter_settings(),
+                Action::Actions => self.open_actions_menu(),
             }
         }
     }
@@ -823,7 +948,7 @@ impl Picker {
         let small = FontId::proportional(12.0);
         let cmd = keys::format_mods(self.keys.quick);
         let show_quick = self.keys.quick != Modifiers::NONE && self.settings.show_numbers;
-        let mut menu_choice: Option<(usize, Action)> = None;
+        let mut menu_choice: Option<(usize, MenuChoice)> = None;
         let mut right_clicked = None;
         let mut clicked = None;
         let mut double_clicked = false;
@@ -914,9 +1039,10 @@ impl Picker {
         });
         self.scroll_offset = out.state.offset.y;
         self.view_height = out.inner_rect.height();
-        if self.settings.show_preview {
+        if self.settings.show_preview && self.actions_menu.is_none() {
             self.image_preview(ui, ctx, t, out.inner_rect);
         }
+        self.actions_menu_ui(ctx, t, out.inner_rect);
 
         if let Some(row) = clicked {
             self.selected = row;
@@ -929,9 +1055,12 @@ impl Picker {
             }
             self.selected = row;
         }
-        if let Some((row, action)) = menu_choice {
+        if let Some((row, choice)) = menu_choice {
             self.selected = row;
-            self.run_action(ctx, action);
+            match choice {
+                MenuChoice::Key(action) => self.run_action(ctx, action),
+                MenuChoice::ClipAction(n) => self.run_clip_action(ctx, n),
+            }
         }
         if double_clicked {
             self.choose(ctx, "PASTE");
@@ -953,7 +1082,7 @@ impl Picker {
     }
 
     /// Right-click menu for a row; returns the chosen action.
-    fn row_menu(&self, ui: &mut egui::Ui, item: &Item) -> Option<Action> {
+    fn row_menu(&self, ui: &mut egui::Ui, item: &Item) -> Option<MenuChoice> {
         ui.set_min_width(190.0);
         let multi = self.marked.len() > 1 && self.marked.contains(&item.clip.id);
         let n = self.marked.len();
@@ -970,6 +1099,21 @@ impl Picker {
             Some((Action::Settings, "Settings…".into())),
         ];
         let mut chosen = None;
+        if !item.clip.is_image && !self.settings.actions.is_empty() {
+            let label = match self.keys.label(Action::Actions) {
+                Some(k) => format!("Actions      {k}"),
+                None => "Actions".to_owned(),
+            };
+            ui.menu_button(label, |ui| {
+                ui.set_min_width(170.0);
+                for (n, action) in self.settings.actions.iter().enumerate() {
+                    if ui.button(&action.name).clicked() {
+                        chosen = Some(MenuChoice::ClipAction(n));
+                    }
+                }
+            });
+            ui.separator();
+        }
         for entry in entries {
             match entry {
                 None => {
@@ -981,7 +1125,7 @@ impl Picker {
                         button = button.shortcut_text(k);
                     }
                     if ui.add(button).clicked() {
-                        chosen = Some(action);
+                        chosen = Some(MenuChoice::Key(action));
                     }
                 }
             }
@@ -1052,6 +1196,7 @@ impl Picker {
                 (Action::Pin, "Pin"),
                 (Action::Delete, "Delete"),
                 (Action::NextTab, "Tabs"),
+                (Action::Actions, "Actions"),
                 (Action::Settings, "Settings"),
             ]),
         };

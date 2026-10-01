@@ -129,11 +129,21 @@ fn watch_clipboard() -> Result<()> {
 /// `clipr store`: saves the clipboard contents given on stdin (run by `wl-paste --watch`).
 pub fn store_from_stdin() -> Result<()> {
     use std::io::Read;
-    // wl-paste sets this; "sensitive" = marked secret by a password manager.
-    if matches!(std::env::var("CLIPBOARD_STATE").as_deref(), Ok("sensitive" | "clear")) {
-        return Ok(());
-    }
     let settings = Settings::load();
+    // wl-paste sets this. "sensitive" = marked secret by a password manager;
+    // "clear" = emptied on purpose (e.g. a password manager after 30s): leave
+    // it. "nil" = emptied because the app that owned it closed: put it back.
+    match std::env::var("CLIPBOARD_STATE").as_deref() {
+        Ok("sensitive" | "clear") => return Ok(()),
+        #[cfg(target_os = "linux")]
+        Ok("nil") => {
+            if settings.keep_clipboard {
+                return platform::restore_clipboard(&Db::open()?);
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     #[cfg(target_os = "linux")]
     if !settings.ignore_apps.is_empty()
         && platform::active_window_class().is_some_and(|c| settings.ignores_app(&c))
@@ -175,6 +185,17 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
         toggle_popup();
         return Ok(());
     }
+    // ACTION <n> <ids>: run action n on the clip(s), then paste / copy the result.
+    let (action, arg) = match cmd {
+        "ACTION" => {
+            let (n, ids) = arg.split_once(' ').unwrap_or((arg, ""));
+            let n: usize = n.parse().with_context(|| format!("bad command {line:?}"))?;
+            let settings = Settings::load();
+            let action = settings.actions.get(n).cloned().with_context(|| format!("no action #{n}"))?;
+            (Some(action), ids)
+        }
+        _ => (None, arg),
+    };
     // One id, or several ("3,7,9") which are joined line by line.
     let ids: Vec<i64> = arg
         .split(',')
@@ -194,6 +215,21 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
         }
         Payload::Text(texts.join("\n"))
     };
+
+    if let Some(action) = action {
+        let Payload::Text(text) = payload else { bail!("actions work on text clips only") };
+        let output = action.run(&text);
+        wait_for_popup_exit();
+        match (output?, action.then) {
+            (Some(out), crate::actions::Then::Paste) => {
+                clipboard.set_text(&out)?;
+                platform::send_paste()?;
+            }
+            (Some(out), _) => clipboard.set_text(&out)?,
+            (None, _) => {}
+        }
+        return Ok(());
+    }
 
     match (cmd, payload) {
         ("TYPE", Payload::Text(text)) => {

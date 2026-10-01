@@ -67,6 +67,42 @@ pub fn type_text(text: &str) -> Result<()> {
     }
 }
 
+/// Puts the most recent clip back on the clipboard after the app that owned
+/// it closed (Wayland then leaves the clipboard empty). `wl-copy` keeps
+/// serving it in the background.
+pub fn restore_clipboard(db: &crate::db::Db) -> Result<()> {
+    use std::io::Write;
+    // The text and image watchers both report "empty"; only restore once,
+    // and only if the clipboard really has nothing in any format.
+    let types = Command::new("wl-paste").arg("--list-types").output();
+    if types.is_ok_and(|o| o.status.success() && !o.stdout.is_empty()) {
+        return Ok(());
+    }
+    let marker = crate::db::data_dir().join("restored");
+    let recent = std::fs::metadata(&marker)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().unwrap_or_default() < std::time::Duration::from_secs(2));
+    if recent {
+        return Ok(());
+    }
+    let _ = std::fs::write(&marker, "");
+    let Some(payload) = db.latest()? else { return Ok(()) };
+    let (mime, bytes) = match payload {
+        crate::db::Payload::Text(t) => ("text/plain;charset=utf-8", t.into_bytes()),
+        crate::db::Payload::Image(png) => ("image/png", png),
+    };
+    let mut child = Command::new("wl-copy")
+        .args(["--type", mime])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("running wl-copy")?;
+    child.stdin.take().unwrap().write_all(&bytes)?;
+    child.wait()?; // wl-copy forks to serve, the parent returns at once
+    Ok(())
+}
+
 /// Starts `wl-paste --watch clipr store` for text and for images. Returns false
 /// if wl-paste isn't available. The watchers die with the daemon.
 pub fn spawn_wl_watchers() -> bool {

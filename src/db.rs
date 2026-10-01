@@ -179,6 +179,19 @@ impl Db {
             .optional()?)
     }
 
+    /// The most recently copied/used clip (what the clipboard last held).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn latest(&self) -> Result<Option<Payload>> {
+        let id: Option<i64> = self
+            .conn
+            .query_row("SELECT id FROM clips ORDER BY last_used DESC LIMIT 1", [], |r| r.get(0))
+            .optional()?;
+        match id {
+            Some(id) => self.payload(id),
+            None => Ok(None),
+        }
+    }
+
     pub fn thumb(&self, id: i64) -> Result<Option<Vec<u8>>> {
         Ok(self
             .conn
