@@ -137,6 +137,7 @@ pub fn run(mode: Mode) -> Result<()> {
             .with_decorations(false)
             .with_transparent(TRANSPARENT)
             .with_always_on_top()
+            .with_icon(window_icon())
             .with_visible(mode == Mode::OneShot),
         centered: true,
         ..Default::default()
@@ -223,6 +224,14 @@ impl Theme {
             }
         }
     }
+}
+
+/// The app icon for the window (Dock / taskbar / Alt-Tab).
+fn window_icon() -> egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../assets/clipr-256.png"))
+        .map(|i| i.into_rgba8())
+        .unwrap_or_default();
+    egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
 }
 
 fn setup_fonts(ctx: &egui::Context) {

@@ -5,8 +5,9 @@ set -e
 BIN="$1"; OUT="$2"; VERSION="${3:-0.0.0}"
 APP="$OUT/clipr.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/clipr"
+cp "$(dirname "$0")/../assets/clipr.icns" "$APP/Contents/Resources/clipr.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -15,6 +16,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>dev.clipr</string>
     <key>CFBundleName</key><string>clipr</string>
     <key>CFBundleExecutable</key><string>clipr</string>
+    <key>CFBundleIconFile</key><string>clipr</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>LSUIElement</key><true/>
