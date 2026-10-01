@@ -29,16 +29,22 @@ download() { # url dest
 
 TMP="$(mktemp -d)"
 
+# macOS's pgrep/pkill skip their own parent processes unless given -a, and a
+# self-update runs as a child of clipr: without -a it would never find clipr.
+ANC=""
+[ "$(uname -s)" = Darwin ] && ANC="-a"
+running() { pgrep $ANC -x clipr | tr '\n' ' '; }
+
 # Stops every running clipr and waits until it's really gone, so an old copy
 # (e.g. one started again by hand mid-update) can't keep running.
 stop_clipr() {
-    pkill -x clipr 2>/dev/null || true
+    pkill $ANC -x clipr 2>/dev/null || true
     i=0
-    while pgrep -x clipr >/dev/null 2>&1 && [ $i -lt 30 ]; do
+    while pgrep $ANC -x clipr >/dev/null 2>&1 && [ $i -lt 30 ]; do
         sleep 0.1
         i=$((i + 1))
     done
-    pkill -9 -x clipr 2>/dev/null || true
+    pkill -9 $ANC -x clipr 2>/dev/null || true
 }
 trap 'rm -rf "$TMP"' EXIT
 
@@ -49,9 +55,9 @@ MAC_AGENT="$HOME/Library/LaunchAgents/dev.clipr.plist"
 install_macos() {
     say "Downloading clipr for macOS"
     download "$(url_for clipr-macos-universal.zip)" "$TMP/clipr.zip"
-    step "downloaded; running clipr: $(pgrep -x clipr | tr '\n' ' ')"
+    step "downloaded; running clipr: $(running)"
     stop_clipr
-    step "stopped; running clipr: $(pgrep -x clipr | tr '\n' ' ')"
+    step "stopped; running clipr: $(running)"
     mkdir -p "$HOME/Applications"
     rm -rf "$MAC_APP"
     ditto -x -k "$TMP/clipr.zip" "$HOME/Applications"
@@ -78,15 +84,15 @@ EOF
     open "$MAC_APP"
     # Make sure the new clipr is really running; start it again if not.
     i=0
-    while ! pgrep -x clipr >/dev/null 2>&1 && [ $i -lt 50 ]; do
+    while ! pgrep $ANC -x clipr >/dev/null 2>&1 && [ $i -lt 50 ]; do
         sleep 0.1
         i=$((i + 1))
     done
-    if ! pgrep -x clipr >/dev/null 2>&1; then
+    if ! pgrep $ANC -x clipr >/dev/null 2>&1; then
         step "clipr didn't start, trying again"
         open -n "$MAC_APP"
     fi
-    step "started; running clipr: $(pgrep -x clipr | tr '\n' ' ')"
+    step "started; running clipr: $(running)"
     cat <<EOF
 
 clipr is installed and running.

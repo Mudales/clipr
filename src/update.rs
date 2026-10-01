@@ -124,8 +124,18 @@ impl Updater {
 }
 
 /// Stops every clipr (daemon and picker) and starts it again, from a detached
-/// helper that outlives us. Also finishes an update whose restart got lost.
+/// helper that outlives us; this process quits by itself right after (so the
+/// helper doesn't have to find it). Also finishes an update whose restart got lost.
 pub fn restart() -> std::io::Result<()> {
+    spawn_restart_helper()?;
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::process::exit(0);
+    });
+    Ok(())
+}
+
+fn spawn_restart_helper() -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     let start = {
         // …/clipr.app/Contents/MacOS/clipr → open -a …/clipr.app (a plain
@@ -142,7 +152,8 @@ pub fn restart() -> std::io::Result<()> {
     {
         use std::os::unix::process::CommandExt;
         Command::new("sh")
-            .args(["-c", &format!("sleep 0.3; pkill -x clipr; sleep 1; {start}")])
+            // -a: macOS's pkill otherwise skips its parent (this clipr).
+            .args(["-c", &format!("sleep 0.6; pkill {} -x clipr; sleep 1; {start}", if cfg!(target_os = "macos") { "-a" } else { "" })])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
