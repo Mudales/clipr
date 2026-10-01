@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platforms">
   <img src="https://img.shields.io/badge/Wayland-Hyprland%20%2F%20Omarchy-5e81ac" alt="Wayland">
   <img src="https://img.shields.io/badge/made%20with-Rust-orange" alt="Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
 
 <p align="center">
@@ -192,3 +193,7 @@ Ctrl+Shift+V instead of Ctrl+V. Debug by running `~/.local/bin/clipr` in a termi
 
 Push a tag (`git tag v0.1.1 && git push --tags`) — GitHub Actions builds the macOS
 universal app and the Linux binary and attaches them to a release, which `install.sh` downloads.
+
+## License
+
+[MIT](LICENSE): free to use, change and share, including commercially.
