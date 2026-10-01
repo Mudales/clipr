@@ -141,7 +141,11 @@ windowrule = center, class:^(clipr)$
 windowrule = stayfocused, class:^(clipr)$
 ```
 
-Then `hyprctl reload`. Terminals (Alacritty, Ghostty, kitty, ...) automatically get
+Then `hyprctl reload`. When the app you copied from closes, Wayland empties the clipboard; clipr puts the last
+clip back (Settings → General → Keep clipboard). Explicit clears, e.g. a password
+manager wiping a password after 30 s, are respected.
+
+Terminals (Alacritty, Ghostty, kitty, ...) automatically get
 Ctrl+Shift+V instead of Ctrl+V. Debug by running `~/.local/bin/clipr` in a terminal.
 
 ## Releasing
