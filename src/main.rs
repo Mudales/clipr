@@ -60,8 +60,8 @@ fn main() -> ExitCode {
         Some("pick") => ui::run(ui::Mode::OneShot),
         Some("store") => daemon::store_from_stdin(),
         Some("clear") => db::Db::open()
-            .and_then(|db| db.clear())
-            .map(|n| println!("cleared {n} clips (kept pinned & saved)")),
+            .and_then(|db| db.clear(true))
+            .map(|n| println!("cleared {n} clips (kept pinned & saved); undo in the picker with Mod+Shift+Z")),
         Some("keys" | "config") => {
             println!("{}", keys::ensure_config().display());
             Ok(())

@@ -36,6 +36,7 @@ most clipboard managers don't: on Wayland (Hyprland, Omarchy) as well as macOS a
 - **Actions:** run a command on a clip (open link, UPPERCASE, trim, or your own shell
   command) and paste the result
 - **Image history** with thumbnails and a large preview
+- **Undo** a delete, even after clearing the whole history
 - **Fully keyboard-driven**, and every shortcut can be changed
 - **Privacy:** skips passwords from password managers, ignores apps and text patterns
   you choose, and can clear the history after a restart. Everything stays on your computer
@@ -85,6 +86,7 @@ Defaults (⌘ on macOS, Ctrl on Windows and Linux). All of them can be changed, 
 | Shift + ↑ ↓ | extend the selection; copy/paste then joins the selected clips line by line |
 | Ctrl + Tab, Ctrl + Shift + Tab | switch History ⇄ Saved |
 | ⌘/Ctrl + K | Actions menu (run a command on the clip) |
+| ⌘/Ctrl + Shift + Z | undo the last delete (also "Undo" at the bottom, or right-click) |
 | ⌘/Ctrl + , or ⚙ | Settings |
 | right-click a clip | menu with every action |
 | Esc | clear the selection, or close |

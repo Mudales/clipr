@@ -127,6 +127,10 @@ struct Picker {
     page: settings_page::Draft,
     /// Waiting for "Delete N clips?" to be confirmed.
     confirm_delete: bool,
+    /// The status line offers Undo (right after a delete).
+    offer_undo: bool,
+    /// The footer's Undo was clicked (footer takes &self).
+    undo_requested: AtomicBool,
     /// The Actions menu (Mod+K) is open, with this entry highlighted.
     actions_menu: Option<usize>,
     /// Multi-selection (⌘A / Shift+↑↓), by clip id.
@@ -170,6 +174,11 @@ pub fn run(mode: Mode) -> Result<()> {
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
+            // Development aid: CLIPR_OPEN=undo shows the "Deleted … Undo" state.
+            if std::env::var("CLIPR_OPEN").as_deref() == Ok("undo") {
+                picker.status = Some("Deleted 3 clips".into());
+                picker.offer_undo = true;
+            }
             // Development aid: CLIPR_OPEN=quit quits right away (tests quit_soon).
             if std::env::var("CLIPR_OPEN").as_deref() == Ok("quit") {
                 crate::update::quit_soon();
@@ -369,6 +378,8 @@ impl Picker {
             settings: Settings::load(),
             updater: Default::default(),
             confirm_delete: false,
+            offer_undo: false,
+            undo_requested: AtomicBool::new(false),
             actions_menu: None,
             view: View::List,
             page: settings_page::Draft::default(),
@@ -546,6 +557,17 @@ impl Picker {
         }
     }
 
+    fn undo_delete(&mut self) {
+        self.offer_undo = false;
+        self.status = Some(match self.db.undo() {
+            Ok(0) => "Nothing to undo".into(),
+            Ok(1) => "Restored 1 clip".into(),
+            Ok(n) => format!("Restored {n} clips"),
+            Err(e) => format!("database error: {e}"),
+        });
+        self.reload();
+    }
+
     fn open_actions_menu(&mut self) {
         if self.settings.actions.is_empty() {
             self.status = Some("No actions yet: add some in Settings → Actions".into());
@@ -719,10 +741,8 @@ impl Picker {
     fn delete_marked(&mut self) {
         let doomed = self.deletable_marked();
         let kept = self.marked.len() - doomed.len();
-        for id in &doomed {
-            if let Err(e) = self.db.delete(*id) {
-                self.status = Some(format!("database error: {e}"));
-            }
+        if let Err(e) = self.db.delete_many(&doomed) {
+            self.status = Some(format!("database error: {e}"));
         }
         self.marked.clear();
         self.selected = 0;
@@ -732,6 +752,7 @@ impl Picker {
                 0 => format!("Deleted {} clips", doomed.len()),
                 _ => format!("Deleted {} clips, kept {kept} pinned/saved", doomed.len()),
             });
+            self.offer_undo = true;
         }
     }
 
@@ -758,6 +779,9 @@ impl Picker {
         if let Some(highlight) = self.actions_menu {
             self.actions_menu_keys(ctx, highlight);
             return;
+        }
+        if self.undo_requested.swap(false, Ordering::SeqCst) {
+            self.undo_delete();
         }
         if self.view == View::Settings {
             // Let the settings fields have every key except Esc (= back).
@@ -824,6 +848,9 @@ impl Picker {
     }
 
     fn run_action(&mut self, ctx: &egui::Context, action: Action) {
+        if action != Action::Undo {
+            self.offer_undo = false;
+        }
         {
             if matches!(action, Action::Save | Action::Pin | Action::Delete) {
                 self.status = None;
@@ -837,7 +864,14 @@ impl Picker {
                 Action::Pin => self.edit_current(|db, c| db.set_pinned(c.id, !c.pinned)),
                 Action::Save => self.edit_current(|db, c| db.set_saved(c.id, !c.saved)),
                 Action::Delete if !self.marked.is_empty() => self.request_delete_marked(),
-                Action::Delete => self.edit_current(|db, c| db.delete(c.id)),
+                Action::Delete => {
+                    self.edit_current(|db, c| db.delete(c.id));
+                    if self.status.is_none() {
+                        self.status = Some("Deleted 1 clip".into());
+                        self.offer_undo = true;
+                    }
+                }
+                Action::Undo => self.undo_delete(),
                 Action::SelectAll => {
                     let all: HashSet<i64> = self.filtered.iter().map(|&i| self.items[i].clip.id).collect();
                     self.marked = if self.marked == all { HashSet::new() } else { all };
@@ -1123,6 +1157,7 @@ impl Picker {
             Some((Action::Delete, if multi { format!("Delete {n} clips") } else { "Delete".into() })),
             None,
             Some((Action::SelectAll, "Select all".into())),
+            (self.db.trash_count() > 0).then(|| (Action::Undo, format!("Undo delete ({})", self.db.trash_count()))),
             Some((Action::Settings, "Settings…".into())),
         ];
         let mut chosen = None;
@@ -1236,6 +1271,22 @@ impl Picker {
             font,
             t.muted,
         );
+        if self.offer_undo {
+            let label = match self.keys.label(Action::Undo) {
+                Some(key) => format!("Undo  {key}"),
+                None => "Undo".to_owned(),
+            };
+            let galley = ui.painter().layout_no_wrap(label, FontId::proportional(12.0), t.accent);
+            let r = egui::Rect::from_min_size(
+                pos2(rect.right() - galley.size().x - 6.0, rect.center().y + 2.0 - galley.size().y / 2.0),
+                galley.size(),
+            );
+            let resp = ui.interact(r.expand(3.0), ui.id().with("undo"), Sense::click());
+            ui.painter().galley(r.min, galley, t.accent);
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                self.undo_requested.store(true, Ordering::SeqCst);
+            }
+        }
     }
 }
 

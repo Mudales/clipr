@@ -29,7 +29,7 @@ pub fn run() -> Result<()> {
     // Create the schema once up front so the threads below don't race on it.
     let db = Db::open()?;
     if crate::boot::is_new_boot() && Settings::load().clear_on_restart {
-        match db.clear() {
+        match db.clear(false) {
             Ok(n) => eprintln!("clipr: cleared {n} clips after restart (kept pinned & saved)"),
             Err(e) => eprintln!("clipr: couldn't clear after restart: {e}"),
         }

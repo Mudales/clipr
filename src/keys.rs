@@ -17,6 +17,7 @@ pub enum Action {
     Close,
     Settings,
     Actions,
+    Undo,
 }
 
 const ACTIONS: &[(&str, Action)] = &[
@@ -32,6 +33,7 @@ const ACTIONS: &[(&str, Action)] = &[
     ("close", Action::Close),
     ("settings", Action::Settings),
     ("actions", Action::Actions),
+    ("undo", Action::Undo),
 ];
 
 /// Written to keys.conf on first run; also the fallback for missing entries.
@@ -58,6 +60,7 @@ prev_tab   = Ctrl+Shift+Tab
 close      = Escape
 settings   = Mod+Comma
 actions    = Mod+K
+undo       = Mod+Shift+Z
 
 # Modifier for pasting item 1-9 directly (e.g. Mod+1).
 quick_paste = Mod
@@ -102,6 +105,7 @@ pub const EDITABLE: &[(&str, &str)] = &[
     ("close", "Close"),
     ("settings", "Settings"),
     ("actions", "Actions menu"),
+    ("undo", "Undo delete"),
     ("quick_paste", "Paste 1–9 modifier"),
     ("hotkey", "Open clipr (global, needs restart)"),
 ];

@@ -50,8 +50,11 @@ fn now_ms() -> i64 {
 
 impl Db {
     pub fn open() -> Result<Self> {
-        let path = data_dir().join("clipr.db");
-        let conn = Connection::open(&path).with_context(|| format!("opening {}", path.display()))?;
+        Self::open_at(&data_dir().join("clipr.db"))
+    }
+
+    pub fn open_at(path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -77,6 +80,8 @@ impl Db {
                  ALTER TABLE clips ADD COLUMN thumb BLOB;",
             )?;
         }
+        // The last deleted clips, for Undo (same columns as `clips`).
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS trash AS SELECT * FROM clips WHERE 0;")?;
         Ok(Self { conn, history_limit: HISTORY_LIMIT, image_limit: IMAGE_LIMIT })
     }
 
@@ -213,13 +218,98 @@ impl Db {
         Ok(())
     }
 
-    /// Deletes the whole history except pinned and saved clips.
-    pub fn clear(&self) -> Result<usize> {
-        Ok(self.conn.execute("DELETE FROM clips WHERE pinned = 0 AND saved_at IS NULL", [])?)
+    /// Deletes the clips matching `filter` (a WHERE clause on `clips`). With
+    /// `undoable`, they replace the previous ones in the trash, for `undo`.
+    fn remove(&self, filter: &str, undoable: bool) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        if undoable {
+            tx.execute("DELETE FROM trash", [])?;
+            tx.execute(&format!("INSERT INTO trash SELECT * FROM clips WHERE {filter}"), [])?;
+        }
+        let n = tx.execute(&format!("DELETE FROM clips WHERE {filter}"), [])?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Deletes the whole history except pinned and saved clips. Not undoable
+    /// is for privacy (clear after restart): it also empties the trash.
+    pub fn clear(&self, undoable: bool) -> Result<usize> {
+        if !undoable {
+            self.conn.execute("DELETE FROM trash", [])?;
+        }
+        self.remove("pinned = 0 AND saved_at IS NULL", undoable)
+    }
+
+    /// Deletes these clips (undoable).
+    pub fn delete_many(&self, ids: &[i64]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let list: Vec<String> = ids.iter().map(i64::to_string).collect();
+        self.remove(&format!("id IN ({})", list.join(",")), true)
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM clips WHERE id = ?1", [id])?;
-        Ok(())
+        self.delete_many(&[id]).map(|_| ())
+    }
+
+    /// How many clips the last delete removed (what Undo would restore).
+    pub fn trash_count(&self) -> usize {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM trash", [], |r| r.get::<_, i64>(0))
+            .map(|n| n as usize)
+            .unwrap_or(0)
+    }
+
+    /// Puts the last deleted clips back; returns how many. Clips copied again
+    /// since (same content) are kept as they are.
+    pub fn undo(&self) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "INSERT OR IGNORE INTO clips (content, created, last_used, pinned, saved_at, kind, data, thumb)
+             SELECT content, created, last_used, pinned, saved_at, kind, data, thumb FROM trash",
+            [],
+        )?;
+        tx.execute("DELETE FROM trash", [])?;
+        tx.commit()?;
+        Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_undo_and_clear() {
+        let path = std::env::temp_dir().join(format!("clipr-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open_at(&path).unwrap();
+        for t in ["one", "two", "three"] {
+            db.add(t).unwrap();
+        }
+        let ids: Vec<i64> = db.history().unwrap().iter().map(|c| c.id).collect();
+        let pinned = ids[0];
+        db.set_pinned(pinned, true).unwrap();
+
+        // Delete two, undo brings them back.
+        assert_eq!(db.delete_many(&ids[1..]).unwrap(), 2);
+        assert_eq!(db.history().unwrap().len(), 1);
+        assert_eq!(db.trash_count(), 2);
+        assert_eq!(db.undo().unwrap(), 2);
+        assert_eq!(db.history().unwrap().len(), 3);
+        assert_eq!(db.trash_count(), 0);
+
+        // Clear keeps the pinned clip and is undoable...
+        assert_eq!(db.clear(true).unwrap(), 2);
+        assert_eq!(db.history().unwrap().len(), 1);
+        assert_eq!(db.undo().unwrap(), 2);
+        // ...unless it's the privacy clear, which also empties the trash.
+        db.delete(pinned).unwrap();
+        db.clear(false).unwrap();
+        assert_eq!(db.trash_count(), 0);
+        assert_eq!(db.undo().unwrap(), 0);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
     }
 }

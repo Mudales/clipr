@@ -429,8 +429,9 @@ impl Picker {
                 .fill(if self.page.confirm_clear { RED } else { Color32::TRANSPARENT });
                 if ui.add(button).clicked() {
                     if self.page.confirm_clear {
-                        self.page.message = Some(match self.db.clear() {
-                            Ok(n) => format!("Cleared {n} clips (kept pinned & saved)"),
+                        let undo = self.keys.label(keys::Action::Undo).unwrap_or_default();
+                        self.page.message = Some(match self.db.clear(true) {
+                            Ok(n) => format!("Cleared {n} clips (kept pinned & saved). Undo in the list: {undo}"),
                             Err(e) => format!("Couldn't clear: {e}"),
                         });
                         self.page.confirm_clear = false;
