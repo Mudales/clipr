@@ -589,7 +589,7 @@ impl Picker {
         let status = self.updater.status();
         card(ui, t, None, |ui| {
             row(ui, t, &format!("clipr {}", current()), Some("Keyboard-driven clipboard history"), |ui| {
-                let busy = matches!(status, Status::Checking | Status::Updating);
+                let busy = matches!(status, Status::Checking | Status::Updating(_));
                 if ui.add_enabled(!busy, egui::Button::new("Check for updates")).clicked() {
                     let ctx = ctx.clone();
                     self.updater.check(move || ctx.request_repaint());
@@ -617,11 +617,20 @@ impl Picker {
                         }
                     });
                 }
-                Status::Updating => {
+                Status::Updating(since) if since.elapsed().as_secs() > 45 => {
+                    divider(ui, t);
+                    row(ui, t, "Taking long?", Some("The update is probably installed: restart clipr"), |ui| {
+                        if ui.button("Restart clipr").clicked() {
+                            self.page.message = crate::update::restart().err().map(|e| format!("Couldn't restart: {e}"));
+                        }
+                    });
+                }
+                Status::Updating(_) => {
                     divider(ui, t);
                     row(ui, t, "Installing… clipr restarts by itself", None, |ui| {
                         ui.spinner();
                     });
+                    ctx.request_repaint_after(std::time::Duration::from_secs(1));
                 }
                 Status::Failed(e) => {
                     divider(ui, t);
@@ -632,6 +641,12 @@ impl Picker {
             }
         });
         card(ui, t, None, |ui| {
+            row(ui, t, "Restart clipr", Some("Stops and starts the background app"), |ui| {
+                if ui.button("Restart").clicked() {
+                    self.page.message = crate::update::restart().err().map(|e| format!("Couldn't restart: {e}"));
+                }
+            });
+            divider(ui, t);
             row(ui, t, "Source code", None, |ui| {
                 ui.hyperlink_to("github.com/Mudales/clipr", "https://github.com/Mudales/clipr");
             });

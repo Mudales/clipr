@@ -42,6 +42,7 @@ USAGE:
     clipr clear      delete the history, keeping pinned and saved clips
     clipr keys       print the path of the keyboard-shortcut file (keys.conf)
     clipr update     check for a newer version and install it
+    clipr restart    stop and start clipr again
     clipr --version  print the version
 ";
 
@@ -66,6 +67,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some("update") => update_cli(),
+        Some("restart") => update::restart().map_err(Into::into),
         Some("-V" | "--version") => {
             println!("clipr {}", env!("CARGO_PKG_VERSION"));
             Ok(())

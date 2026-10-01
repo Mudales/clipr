@@ -14,7 +14,8 @@ pub enum Status {
     UpToDate,
     /// A newer version, e.g. "0.6.0".
     Available(String),
-    Updating,
+    /// The installer is running (since then).
+    Updating(std::time::Instant),
     Failed(String),
 }
 
@@ -88,10 +89,52 @@ impl Updater {
     pub fn install(&self) {
         let result = spawn_installer();
         self.set(match result {
-            Ok(()) => Status::Updating,
+            Ok(()) => Status::Updating(std::time::Instant::now()),
             Err(e) => Status::Failed(format!("couldn't start the installer: {e}")),
         });
     }
+}
+
+/// Stops every clipr (daemon and picker) and starts it again, from a detached
+/// helper that outlives us. Also finishes an update whose restart got lost.
+pub fn restart() -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let start = {
+        // …/clipr.app/Contents/MacOS/clipr → open -a …/clipr.app (a plain
+        // binary, e.g. from a source build, is started directly).
+        let exe = std::env::current_exe()?;
+        match exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) {
+            Some(app) => format!("open -a '{}'", app.display()),
+            None => format!("nohup '{}' >/dev/null 2>&1 &", exe.display()),
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let start = format!("nohup '{}' >/dev/null 2>&1 &", std::env::current_exe()?.display());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Command::new("sh")
+            .args(["-c", &format!("sleep 0.3; pkill -x clipr; sleep 1; {start}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let exe = std::env::current_exe()?;
+        let script = format!(
+            "Start-Sleep -Milliseconds 300; Stop-Process -Name clipr -Force; Start-Sleep 1; Start-Process '{}'",
+            exe.display()
+        );
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .creation_flags(0x0800_0000 | 0x0000_0008) // no window, detached
+            .spawn()?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

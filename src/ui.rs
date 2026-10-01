@@ -200,7 +200,7 @@ impl Theme {
         let rgba = Color32::from_rgba_unmultiplied;
         if dark {
             Self {
-                bg: rgba(36, 36, 38, 250),
+                bg: rgba(36, 36, 38, 255),
                 border: rgba(255, 255, 255, 30),
                 text: Color32::from_rgb(236, 236, 240),
                 muted: Color32::from_rgb(145, 145, 152),
@@ -212,7 +212,7 @@ impl Theme {
             }
         } else {
             Self {
-                bg: rgba(250, 250, 252, 252),
+                bg: rgba(250, 250, 252, 255),
                 border: rgba(0, 0, 0, 36),
                 text: Color32::from_rgb(28, 28, 30),
                 muted: Color32::from_rgb(118, 118, 126),
