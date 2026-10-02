@@ -20,6 +20,8 @@ pub struct Clip {
     pub pinned: bool,
     pub saved: bool,
     pub is_image: bool,
+    /// When it was last copied or pasted (ms since 1970).
+    pub last_used: i64,
 }
 
 /// What gets put back on the clipboard.
@@ -150,6 +152,7 @@ impl Db {
                 pinned: r.get(2)?,
                 saved: r.get::<_, Option<i64>>(3)?.is_some(),
                 is_image: r.get::<_, i64>(4)? == KIND_IMAGE,
+                last_used: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -158,7 +161,7 @@ impl Db {
     /// All clips: pinned first, then most recently used.
     pub fn history(&self) -> Result<Vec<Clip>> {
         self.query(
-            "SELECT id, content, pinned, saved_at, kind FROM clips
+            "SELECT id, content, pinned, saved_at, kind, last_used FROM clips
              ORDER BY pinned DESC, last_used DESC",
         )
     }
@@ -166,7 +169,7 @@ impl Db {
     /// Saved clips in the order they were saved, so their numbers stay stable.
     pub fn saved(&self) -> Result<Vec<Clip>> {
         self.query(
-            "SELECT id, content, pinned, saved_at, kind FROM clips
+            "SELECT id, content, pinned, saved_at, kind, last_used FROM clips
              WHERE saved_at IS NOT NULL ORDER BY saved_at ASC",
         )
     }

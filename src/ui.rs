@@ -20,7 +20,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 const ROW_H: f32 = 28.0;
-const WINDOW: [f32; 2] = [480.0, 440.0];
+/// The list column; the preview pane (if on) adds `PREVIEW_W` to its right.
+const LIST_W: f32 = 480.0;
+const PREVIEW_W: f32 = 330.0;
+const WINDOW_H: f32 = 440.0;
+
+fn window_size(preview: bool) -> egui::Vec2 {
+    vec2(if preview { LIST_W + PREVIEW_W } else { LIST_W }, WINDOW_H)
+}
 const CORNER: f32 = 12.0;
 /// Transparent window with our own rounded corners on macOS; on Linux the
 /// compositor rounds the (opaque) window itself.
@@ -146,7 +153,7 @@ pub fn run(mode: Mode) -> Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("clipr")
             .with_app_id("clipr")
-            .with_inner_size(WINDOW)
+            .with_inner_size(window_size(Settings::load().show_preview))
             .with_resizable(false)
             .with_decorations(false)
             .with_transparent(TRANSPARENT)
@@ -306,6 +313,22 @@ fn visual_order(s: &str) -> String {
         }
     }
     out
+}
+
+/// "just now", "5 min ago", "3 h ago", "2 days ago".
+fn time_ago(ms: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(ms);
+    let s = (now - ms).max(0) / 1000;
+    match s {
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{} min ago", s / 60),
+        3600..=86_399 => format!("{} h ago", s / 3600),
+        86_400..=172_799 => "yesterday".into(),
+        _ => format!("{} days ago", s / 86_400),
+    }
 }
 
 /// A small gear icon (drawn, so it doesn't depend on the font).
@@ -480,8 +503,8 @@ impl Picker {
     fn show(&mut self, ctx: &egui::Context) {
         self.keys = Keymap::load(); // pick up edits to keys.conf
         self.settings = Settings::load();
-        self.apply_settings(ctx);
         self.view = View::List;
+        self.apply_settings(ctx);
         self.query.clear();
         self.marked.clear();
         let notice = crate::update::take_updated_notice();
@@ -770,6 +793,12 @@ impl Picker {
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
+        // Wider window when the preview pane is on (Settings stays narrow).
+        let want = window_size(self.settings.show_preview && self.view == View::List);
+        let have = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
+        if have.is_some_and(|h| (h.x - want.x).abs() > 1.0) {
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(want));
+        }
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -889,6 +918,9 @@ impl Picker {
         self.page = settings_page::Draft::new(&self.settings, &self.keys);
         self.view = View::Settings;
         self.status = None;
+        if let Some(ctx) = CONTEXT.get() {
+            self.apply_settings(ctx); // narrow window for Settings
+        }
     }
 
     fn leave_settings(&mut self, ctx: &egui::Context) {
@@ -1100,9 +1132,6 @@ impl Picker {
         });
         self.scroll_offset = out.state.offset.y;
         self.view_height = out.inner_rect.height();
-        if self.settings.show_preview && self.actions_menu.is_none() {
-            self.image_preview(ui, ctx, t, out.inner_rect);
-        }
         self.actions_menu_ui(ctx, t, out.inner_rect);
 
         if let Some(row) = clicked {
@@ -1195,31 +1224,79 @@ impl Picker {
         chosen
     }
 
-    /// Larger preview of the selected image, in the half of the list away
-    /// from the selected row so it doesn't cover it.
-    fn image_preview(&self, ui: &egui::Ui, ctx: &egui::Context, t: &Theme, list: egui::Rect) {
-        let Some(&idx) = self.filtered.get(self.selected) else { return };
-        let item = &self.items[idx];
-        if item.image.is_none() {
+    /// The preview pane on the right: the whole selected clip, image or text.
+    fn preview_pane(&self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Theme) {
+        let rect = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(rect, 10.0, t.field);
+        ui.painter().rect_stroke(rect, 10.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        let inner = rect.shrink(12.0);
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
+        let muted = |text: String| egui::RichText::new(text).size(11.5).color(t.muted);
+
+        if self.marked.len() > 1 {
+            ui.centered_and_justified(|ui| ui.label(muted(format!("{} clips selected", self.marked.len()))));
             return;
         }
-        let Some(tex) = self.thumb(ctx, item.clip.id) else { return };
-        let row_y = list.top() + self.selected as f32 * ROW_H - self.scroll_offset;
-        let size = vec2(list.width() * 0.6, list.height() * 0.45);
-        let min = if row_y > list.center().y {
-            pos2(list.right() - size.x - 8.0, list.top() + 8.0)
-        } else {
-            pos2(list.right() - size.x - 8.0, list.bottom() - size.y - 8.0)
+        let Some(&idx) = self.filtered.get(self.selected) else {
+            ui.centered_and_justified(|ui| ui.label(muted("Nothing selected".into())));
+            return;
         };
-        let panel = egui::Rect::from_min_size(min, size);
-        // Own layer, so it's drawn above the list rows.
-        let painter = ctx
-            .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("image_preview")))
-            .with_clip_rect(ui.clip_rect());
-        painter.rect_filled(panel.expand(1.0), 10.0, t.border);
-        painter.rect_filled(panel, 10.0, t.bg.to_opaque());
-        let fit = fit_rect(tex.size_vec2(), panel.shrink(8.0));
-        painter.image(tex.id(), fit, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let item = &self.items[idx];
+        let ago = time_ago(item.clip.last_used);
+        let mut tags = Vec::new();
+        if item.clip.pinned {
+            tags.push("Pinned");
+        }
+        if item.clip.saved {
+            tags.push("Saved");
+        }
+        let info_h = 18.0;
+
+        if let Some((w, h)) = item.image {
+            let area = egui::Rect::from_min_max(inner.min, pos2(inner.max.x, inner.max.y - info_h - 6.0));
+            if let Some(tex) = self.thumb(ctx, item.clip.id) {
+                let mut size = tex.size_vec2();
+                // Fit the pane; enlarge small images at most 2×.
+                let scale = (area.width() / size.x).min(area.height() / size.y).min(2.0);
+                size *= scale;
+                let r = egui::Rect::from_center_size(area.center(), size);
+                ui.painter().image(tex.id(), r, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            let mut info = format!("Image  {w} × {h}  ·  {ago}");
+            for tag in &tags {
+                info.push_str(&format!("  ·  {tag}"));
+            }
+            ui.painter().text(pos2(inner.left(), inner.bottom()), Align2::LEFT_BOTTOM, info, FontId::proportional(11.5), t.muted);
+            return;
+        }
+
+        let text = &item.clip.content;
+        let shown: String = text.chars().take(20_000).collect();
+        let lines = text.lines().count().max(1);
+        let chars = text.chars().count();
+        egui::ScrollArea::vertical()
+            .id_salt(("preview", item.clip.id))
+            .max_height(inner.height() - info_h - 6.0)
+            .auto_shrink([false, false])
+            .show(&mut ui, |ui| {
+                let display: Vec<String> = shown.lines().map(visual_order).collect();
+                let job = egui::text::LayoutJob::simple(
+                    display.join("\n"),
+                    FontId::proportional(13.5),
+                    t.text,
+                    ui.available_width(),
+                );
+                ui.label(job);
+            });
+        let mut info = format!(
+            "{chars} character{}  ·  {lines} line{}  ·  {ago}",
+            if chars == 1 { "" } else { "s" },
+            if lines == 1 { "" } else { "s" }
+        );
+        for tag in &tags {
+            info.push_str(&format!("  ·  {tag}"));
+        }
+        ui.painter().text(pos2(inner.left(), inner.bottom()), Align2::LEFT_BOTTOM, info, FontId::proportional(11.5), t.muted);
     }
 
     fn footer(&self, ui: &mut egui::Ui, t: &Theme) {
@@ -1376,14 +1453,23 @@ impl eframe::App for Picker {
                     self.settings_page(ui, &ctx, &t);
                     return;
                 }
-                self.header(ui, &t);
-                ui.add_space(8.0);
+                let full = ui.available_rect_before_wrap();
+                let pane = self.settings.show_preview && full.width() > LIST_W;
+                let column = if pane { full.with_max_x(full.left() + LIST_W - 20.0) } else { full };
+                let mut left = ui.new_child(egui::UiBuilder::new().max_rect(column).layout(egui::Layout::top_down(egui::Align::Min)));
+                self.header(&mut left, &t);
+                left.add_space(8.0);
                 let footer_h = if self.settings.show_footer || self.status.is_some() { 26.0 } else { 0.0 };
-                let list_h = ui.available_height() - footer_h;
-                self.list(ui, &ctx, &t, list_h);
+                let list_h = left.available_height() - footer_h;
+                self.list(&mut left, &ctx, &t, list_h);
                 if footer_h > 0.0 {
-                    ui.add_space(4.0);
-                    self.footer(ui, &t);
+                    left.add_space(4.0);
+                    self.footer(&mut left, &t);
+                }
+                if pane {
+                    let rect = full.with_min_x(column.right() + 10.0);
+                    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+                    self.preview_pane(&mut right, &ctx, &t);
                 }
                 // Last, so it's drawn over the list.
                 if self.confirm_delete {

@@ -35,7 +35,8 @@ most clipboard managers don't: on Wayland (Hyprland, Omarchy) as well as macOS a
 - **Saved tab** for snippets you reuse, and **pinned** clips that stay on top
 - **Actions:** run a command on a clip (open link, UPPERCASE, trim, or your own shell
   command) and paste the result
-- **Image history** with thumbnails and a large preview
+- **Preview pane** beside the list: the whole clip, images large, with size and age
+- **Image history** with thumbnails
 - **Undo** a delete, even after clearing the whole history
 - **Fully keyboard-driven**, and every shortcut can be changed
 - **Privacy:** skips passwords from password managers, ignores apps and text patterns

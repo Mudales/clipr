@@ -311,7 +311,11 @@ impl Picker {
         }
 
         let before = self.settings.clone();
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.page.page {
+        let tab = self.page.page as u8;
+        egui::ScrollArea::vertical()
+            .id_salt(("settings", tab))
+            .auto_shrink([false, false])
+            .show(ui, |ui| match self.page.page {
             Page::General => self.general(ui, t),
             Page::Storage => self.storage(ui, t),
             Page::Ignore => self.ignore(ui, t),
@@ -321,7 +325,7 @@ impl Picker {
         });
         if self.settings != before {
             self.page.message = self.settings.save().err().map(|e| format!("Couldn't save settings: {e}"));
-            if self.settings.theme != before.theme {
+            if self.settings.theme != before.theme || self.settings.show_preview != before.show_preview {
                 self.apply_settings(ctx);
             }
         }
@@ -377,7 +381,7 @@ impl Picker {
                 );
             });
             divider(ui, t);
-            row(ui, t, "Image preview", None, |ui| {
+            row(ui, t, "Preview pane", Some("The whole clip, beside the list"), |ui| {
                 switch(ui, t, &mut s.show_preview);
             });
             divider(ui, t);
