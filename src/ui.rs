@@ -794,11 +794,12 @@ impl Picker {
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
         // Wider window when the preview pane is on (Settings stays narrow).
+        // The window isn't user-resizable, which Wayland enforces as a fixed
+        // min = max size: move those limits along, or Hyprland keeps the old size.
         let want = window_size(self.settings.show_preview && self.view == View::List);
-        let have = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
-        if have.is_some_and(|h| (h.x - want.x).abs() > 1.0) {
-            ctx.send_viewport_cmd(ViewportCommand::InnerSize(want));
-        }
+        ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(want));
+        ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(want));
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(want));
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -1404,6 +1405,17 @@ fn debug_screenshot(ctx: &egui::Context) {
 impl eframe::App for Picker {
     /// Keeps running while the resident window is hidden.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Development aid: CLIPR_OPEN=delayed-settings opens Settings after
+        // ~1 s with the window already up (like clicking the gear).
+        if ctx.cumulative_pass_nr() == 180 && std::env::var("CLIPR_OPEN").as_deref() == Ok("delayed-settings") {
+            self.enter_settings();
+        }
+        if ctx.cumulative_pass_nr() == 300 && std::env::var("CLIPR_OPEN").as_deref() == Ok("delayed-settings") {
+            self.leave_settings(ctx);
+        }
+        if std::env::var("CLIPR_OPEN").as_deref() == Ok("delayed-settings") && ctx.cumulative_pass_nr() < 301 {
+            ctx.request_repaint();
+        }
         if QUIT_REQUESTED.load(Ordering::SeqCst) {
             ctx.send_viewport_cmd(ViewportCommand::Close);
             return;
