@@ -63,7 +63,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 fn latest_tag() -> Result<String, String> {
-    let out = Command::new("curl")
+    let out = crate::hidden(&mut Command::new("curl"))
         .args(["-fsSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json"])
         .arg(format!("https://api.github.com/repos/{REPO}/releases/latest"))
         .stdin(Stdio::null())
@@ -173,16 +173,14 @@ fn spawn_restart_helper() -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         let exe = std::env::current_exe()?;
         let script = format!(
             "Start-Sleep -Milliseconds 300; Stop-Process -Name clipr -Force; Start-Sleep 1; Start-Process '{}'",
-            exe.display()
+            exe.display().to_string().replace('\'', "''")
         );
-        Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .creation_flags(0x0800_0000 | 0x0000_0008) // no window, detached
-            .spawn()?;
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-Command", &script]);
+        spawn_outliving(cmd)?;
     }
     Ok(())
 }
@@ -205,16 +203,32 @@ fn spawn_installer() -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn spawn_installer() -> std::io::Result<()> {
+    let log = crate::db::data_dir().join("update.log").display().to_string().replace('\'', "''");
+    let script = format!(
+        "Start-Transcript -Path '{log}' -Force | Out-Null; \
+         try {{ irm https://raw.githubusercontent.com/{REPO}/master/install.ps1 | iex }} catch {{ \"update failed: $_\" }}; \
+         Stop-Transcript | Out-Null"
+    );
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]).stdin(Stdio::null());
+    spawn_outliving(cmd)
+}
+
+/// Starts a hidden helper that must outlive this clipr: detached, and out of
+/// our job object if we're in one (e.g. started by Task Scheduler), since a
+/// job can kill its processes when clipr exits.
+#[cfg(windows)]
+fn spawn_outliving(mut cmd: Command) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
-    let script = format!("irm https://raw.githubusercontent.com/{REPO}/master/install.ps1 | iex");
-    Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
-        .stdin(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-        .spawn()?;
-    Ok(())
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
+    match cmd.spawn() {
+        Ok(_) => Ok(()),
+        // The job doesn't allow breaking away: start it inside, then.
+        Err(_) => cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS).spawn().map(|_| ()),
+    }
 }
 
 #[cfg(test)]

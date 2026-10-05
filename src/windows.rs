@@ -204,26 +204,57 @@ pub fn type_text(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Start at login: the per-user Run key (no admin rights needed).
+/// Start at login: the per-user Run key (no admin rights needed). Uses the
+/// registry API directly: starting reg.exe is slow on machines with endpoint
+/// security software, and this runs on the UI thread.
 pub mod login {
-    use std::process::Command;
-    const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    };
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
     pub fn enabled() -> bool {
-        Command::new("reg")
-            .args(["query", KEY, "/v", "clipr"])
-            .output()
-            .is_ok_and(|o| o.status.success())
+        let (key, name) = (wide(KEY), wide("clipr"));
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        status == ERROR_SUCCESS
     }
 
     pub fn set(on: bool) -> std::io::Result<()> {
-        let exe = std::env::current_exe()?;
+        let (key, name) = (wide(KEY), wide("clipr"));
         let status = if on {
-            let value = format!("\"{}\"", exe.display());
-            Command::new("reg").args(["add", KEY, "/v", "clipr", "/t", "REG_SZ", "/d", &value, "/f"]).status()?
+            let value = wide(&format!("\"{}\"", std::env::current_exe()?.display()));
+            unsafe {
+                RegSetKeyValueW(
+                    HKEY_CURRENT_USER,
+                    key.as_ptr(),
+                    name.as_ptr(),
+                    REG_SZ,
+                    value.as_ptr().cast(),
+                    (value.len() * 2) as u32,
+                )
+            }
         } else {
-            Command::new("reg").args(["delete", KEY, "/v", "clipr", "/f"]).status()?
+            match unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) } {
+                2 => ERROR_SUCCESS, // ERROR_FILE_NOT_FOUND: already off
+                other => other,
+            }
         };
-        if status.success() { Ok(()) } else { Err(std::io::Error::other("reg.exe failed")) }
+        if status == ERROR_SUCCESS { Ok(()) } else { Err(std::io::Error::from_raw_os_error(status as i32)) }
     }
 }

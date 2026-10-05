@@ -40,7 +40,7 @@ ksni = { version = "0.3", default-features = false, features = ["blocking", "asy
 [target."cfg(windows)".dependencies]
 global-hotkey = "0.8"
 tray-icon = { version = "0.26", default-features = false }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_System_Console", "Win32_System_ProcessStatus", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_Graphics_Dwm", "Win32_System_Console", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Registry"] }
 
 [target."cfg(windows)".build-dependencies]
 winresource = "0.1.31"

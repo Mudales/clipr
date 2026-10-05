@@ -125,7 +125,7 @@ fn shell(command: &str, input: &str) -> Result<String> {
         c.args(["-c", command]);
         c
     };
-    let mut child = cmd
+    let mut child = crate::hidden(&mut cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

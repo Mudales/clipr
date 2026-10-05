@@ -1060,7 +1060,15 @@ impl Picker {
         let seg = row.with_min_x(row.right() - seg_w - gear_w - 4.0).with_max_x(row.right() - gear_w - 4.0);
         let gear = row.with_min_x(row.right() - gear_w);
         let gear_resp = ui.interact(gear, ui.id().with("gear"), Sense::click());
-        ui.painter().rect_filled(gear, 8.0, if gear_resp.hovered() { t.hover } else { t.field });
+        // Pressed: accent-tinted, so the click is visible right away.
+        let fill = if gear_resp.is_pointer_button_down_on() {
+            t.accent.gamma_multiply(0.35)
+        } else if gear_resp.hovered() {
+            t.hover
+        } else {
+            t.field
+        };
+        ui.painter().rect_filled(gear, 8.0, fill);
         paint_gear(ui.painter(), gear.center(), t.muted);
         if gear_resp.on_hover_text("Settings").clicked() {
             self.enter_settings();

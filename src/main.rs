@@ -47,6 +47,17 @@ USAGE:
     clipr --version  print the version
 ";
 
+/// Windows: run a console program without flashing a console window (which
+/// would also take the focus, and with it close the picker).
+pub fn hidden(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 fn main() -> ExitCode {
     // As a GUI app on Windows we have no console; borrow the terminal's when
     // started from one, so `clipr --version` etc. still print.
