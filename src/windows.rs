@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+    FindWindowW, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
 };
 
 const VK_V: VIRTUAL_KEY = 0x56;
@@ -81,6 +81,18 @@ pub fn is_own(handle: isize) -> bool {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(handle as HWND, &mut pid) };
     pid == std::process::id()
+}
+
+/// Whether `handle` is the taskbar or its tray overflow (what's focused
+/// right after clicking the tray icon).
+pub fn is_shell(handle: isize) -> bool {
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(handle as HWND, buf.as_mut_ptr(), buf.len() as i32) };
+    let class = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+    matches!(
+        class.as_str(),
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow" | "TopLevelWindowForOverflowXamlIsland"
+    )
 }
 
 pub fn activate(handle: isize) {

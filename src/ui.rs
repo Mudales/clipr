@@ -1,5 +1,6 @@
 //! The picker popup: fuzzy search over history / saved clips, fully keyboard driven.
 
+use crate::actions::Then;
 use crate::db::{Clip, Db};
 use crate::images::parse_key;
 use std::cell::RefCell;
@@ -16,7 +17,8 @@ use eframe::egui::{
 };
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 use std::sync::{Arc, OnceLock};
 
 const ROW_H: f32 = 28.0;
@@ -28,10 +30,25 @@ const WINDOW_H: f32 = 440.0;
 fn window_size(preview: bool) -> egui::Vec2 {
     vec2(if preview { LIST_W + PREVIEW_W } else { LIST_W }, WINDOW_H)
 }
-const CORNER: f32 = 12.0;
+const MIN_SIZE: egui::Vec2 = vec2(380.0, 300.0);
+
+/// The list window's size: as the user last resized it, or the default.
+fn list_size(s: &Settings) -> egui::Vec2 {
+    if s.window_w >= MIN_SIZE.x && s.window_h >= MIN_SIZE.y {
+        vec2(s.window_w, s.window_h)
+    } else {
+        window_size(s.show_preview)
+    }
+}
+
+/// macOS and Windows get the system title bar (close / minimize / zoom,
+/// dragging and resizing for free). Hyprland doesn't draw title bars, so on
+/// Linux the window is frameless and does its own dragging and resizing.
+const NATIVE_FRAME: bool = cfg!(any(target_os = "macos", windows));
+const CORNER: f32 = if NATIVE_FRAME { 0.0 } else { 12.0 };
 /// Transparent window with our own rounded corners on macOS; on Linux the
 /// compositor rounds the (opaque) window itself.
-const TRANSPARENT: bool = cfg!(target_os = "macos");
+const TRANSPARENT: bool = false;
 const PREVIEW_CHARS: usize = 160;
 /// Only the start of very long clips is searched, to keep typing instant.
 const SEARCH_CHARS: usize = 4096;
@@ -73,6 +90,18 @@ pub fn request_quit() {
 }
 static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
 
+/// 1 = open the picker, 2 = open it on Settings (tray menu).
+static OPEN_REQUESTED: AtomicU8 = AtomicU8::new(0);
+
+/// Open the resident picker, on Settings if asked. Safe from any thread.
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+pub fn request_open(settings: bool) {
+    OPEN_REQUESTED.store(if settings { 2 } else { 1 }, Ordering::SeqCst);
+    if let Some(ctx) = CONTEXT.get() {
+        ctx.request_repaint();
+    }
+}
+
 /// Show/hide the resident picker. Safe to call from any thread.
 #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 pub fn request_toggle() {
@@ -86,7 +115,7 @@ pub fn request_toggle() {
 #[derive(Clone, Copy)]
 enum MenuChoice {
     Key(Action),
-    ClipAction(usize),
+    ClipAction(usize, Option<Then>),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -144,6 +173,10 @@ struct Picker {
     marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
     thumbs: RefCell<HashMap<i64, Option<egui::TextureHandle>>>,
+    /// When we last resized the window ourselves.
+    sized_at: std::cell::Cell<Option<Instant>>,
+    /// A size the user is resizing to, and since when it's been steady.
+    pending_size: Option<(egui::Vec2, Instant)>,
 }
 
 pub fn run(mode: Mode) -> Result<()> {
@@ -153,9 +186,14 @@ pub fn run(mode: Mode) -> Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("clipr")
             .with_app_id("clipr")
-            .with_inner_size(window_size(Settings::load().show_preview))
-            .with_resizable(false)
-            .with_decorations(false)
+            .with_inner_size(list_size(&Settings::load()))
+            .with_min_inner_size(MIN_SIZE)
+            .with_resizable(true)
+            .with_decorations(NATIVE_FRAME)
+            // macOS: only the traffic lights, over our content (no title).
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
             .with_transparent(TRANSPARENT)
             .with_always_on_top()
             .with_icon(window_icon())
@@ -180,6 +218,10 @@ pub fn run(mode: Mode) -> Result<()> {
             picker.status = crate::update::take_updated_notice().or_else(|| picker.keys.errors.first().cloned());
             picker.apply_settings(&cc.egui_ctx);
             picker.reload();
+            // `clipr pick settings` (Linux tray → Settings…).
+            if mode == Mode::OneShot && std::env::args().nth(2).as_deref() == Some("settings") {
+                picker.enter_settings();
+            }
             // Development aid (with CLIPR_SCREENSHOT): start on the Settings page.
             // Development aid: CLIPR_OPEN=undo shows the "Deleted … Undo" state.
             if std::env::var("CLIPR_OPEN").as_deref() == Ok("undo") {
@@ -315,6 +357,11 @@ fn visual_order(s: &str) -> String {
     out
 }
 
+/// How the primary modifier is written: "⌘" on macOS, "Ctrl+" elsewhere.
+fn mod_label() -> &'static str {
+    if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" }
+}
+
 /// "just now", "5 min ago", "3 h ago", "2 days ago".
 fn time_ago(ms: i64) -> String {
     let now = std::time::SystemTime::now()
@@ -395,6 +442,8 @@ impl Picker {
             scroll_offset: 0.0,
             view_height: 0.0,
             thumbs: RefCell::default(),
+            sized_at: Default::default(),
+            pending_size: None,
             marked: HashSet::new(),
             status: None,
             keys: Keymap::load(),
@@ -514,6 +563,9 @@ impl Picker {
         self.reload();
         self.visible = true;
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        if NATIVE_FRAME {
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+        }
         ctx.send_viewport_cmd(ViewportCommand::Focus);
         #[cfg(any(target_os = "macos", windows))]
         crate::platform::activate_self();
@@ -602,13 +654,15 @@ impl Picker {
     }
 
     /// Runs action `n` on the selected clip(s) in the daemon, then closes.
-    fn run_clip_action(&mut self, ctx: &egui::Context, n: usize) {
+    /// Runs action `n`; `then` overrides what happens with the result.
+    fn run_clip_action(&mut self, ctx: &egui::Context, n: usize, then: Option<Then>) {
         self.actions_menu = None;
         let ids: Vec<String> = self.target_ids().iter().map(i64::to_string).collect();
         if ids.is_empty() {
             return;
         }
-        match ipc::send(&format!("ACTION {n} {}", ids.join(","))) {
+        let how = then.map(|t| format!(" {}", t.name())).unwrap_or_default();
+        match ipc::send(&format!("ACTION {n} {}{how}", ids.join(","))) {
             Ok(()) => self.close(ctx, false),
             Err(_) => self.status = Some("clipr daemon is not running — start it with `clipr`".into()),
         }
@@ -628,7 +682,13 @@ impl Picker {
                 self.actions_menu = Some((highlight + count - 1) % count);
             }
             if i.consume_key(Modifiers::NONE, Key::Enter) {
-                run = Some(highlight);
+                run = Some((highlight, None));
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::Enter) || i.consume_key(Modifiers::COMMAND, Key::C) {
+                run = Some((highlight, Some(Then::Copy)));
+            }
+            if i.consume_key(Modifiers::COMMAND, Key::Z) {
+                run = Some((highlight, Some(Then::Type)));
             }
             let digits = [
                 Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5,
@@ -636,14 +696,14 @@ impl Picker {
             ];
             for (n, key) in digits.into_iter().enumerate() {
                 if n < count && i.consume_key(Modifiers::NONE, key) {
-                    run = Some(n);
+                    run = Some((n, None));
                 }
             }
             // Keep the search box from seeing typed text while the menu is open.
             i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
         });
-        if let Some(n) = run {
-            self.run_clip_action(ctx, n);
+        if let Some((n, then)) = run {
+            self.run_clip_action(ctx, n, then);
         }
     }
 
@@ -652,7 +712,7 @@ impl Picker {
         let Some(highlight) = self.actions_menu else { return };
         let row_y = list.top() + self.selected as f32 * ROW_H - self.scroll_offset;
         let below = row_y + ROW_H + 4.0;
-        let height = self.settings.actions.len() as f32 * 26.0 + 34.0;
+        let height = self.settings.actions.len() as f32 * 26.0 + 54.0;
         let y = if below + height > list.bottom() { (row_y - height - 4.0).max(list.top()) } else { below };
         let mut run = None;
         egui::Area::new(egui::Id::new("actions_menu"))
@@ -678,21 +738,20 @@ impl Picker {
                             let dim = if on { t.on_accent } else { t.muted };
                             let font = FontId::proportional(13.0);
                             ui.painter().text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, &action.name, font, fg);
-                            let tag = match action.then {
-                                crate::actions::Then::Paste => "paste",
-                                crate::actions::Then::Copy => "copy",
-                                crate::actions::Then::Run => "run",
-                            };
+                            let tag = action.then.name();
                             let hint = if n < 9 { format!("{tag}   {}", n + 1) } else { tag.to_owned() };
                             ui.painter().text(rect.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, hint, FontId::proportional(11.5), dim);
                             if resp.clicked() {
                                 run = Some(n);
                             }
                         }
+                        let hint = format!("Enter: as shown  ·  ⇧Enter: copy  ·  {}Z: type out", mod_label());
+                        ui.add_space(2.0);
+                        ui.label(egui::RichText::new(hint).size(10.5).color(t.muted));
                     });
             });
         if let Some(n) = run {
-            self.run_clip_action(ctx, n);
+            self.run_clip_action(ctx, n, None);
         }
     }
 
@@ -793,13 +852,57 @@ impl Picker {
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
-        // Wider window when the preview pane is on (Settings stays narrow).
-        // The window isn't user-resizable, which Wayland enforces as a fixed
-        // min = max size: move those limits along, or Hyprland keeps the old size.
-        let want = window_size(self.settings.show_preview && self.view == View::List);
-        ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(want));
-        ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(want));
-        ctx.send_viewport_cmd(ViewportCommand::InnerSize(want));
+        // The list at the user's size; Settings narrow, at the same height.
+        let list = list_size(&self.settings);
+        let want = if self.view == View::List { list } else { vec2(LIST_W, list.y) };
+        let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
+        ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(MIN_SIZE));
+        ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(vec2(10_000.0, 10_000.0)));
+        if !maximized {
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(want));
+        }
+        self.sized_at.set(Some(std::time::Instant::now()));
+        #[cfg(any(target_os = "macos", windows))]
+        if self.mode == Mode::Resident {
+            crate::tray::sync(self.settings.show_tray, &self.keys.hotkey);
+        }
+    }
+
+    /// Remembers the list window's size after the user resizes it (once it
+    /// has stopped changing, so a drag doesn't write the file many times).
+    fn remember_size(&mut self, ctx: &egui::Context) {
+        if self.view != View::List || !self.visible {
+            return;
+        }
+        let (size, maximized) = ctx.input(|i| (i.viewport().inner_rect.map(|r| r.size()), i.viewport().maximized == Some(true)));
+        let Some(size) = size else { return };
+        // Ignore our own resizes (and the window settling after them).
+        if maximized || self.sized_at.get().is_some_and(|t| t.elapsed() < Duration::from_millis(800)) {
+            self.pending_size = None;
+            return;
+        }
+        if (size - list_size(&self.settings)).length() < 2.0 {
+            self.pending_size = None;
+            return;
+        }
+        match self.pending_size {
+            Some((s, since)) if (s - size).length() < 1.0 => {
+                if since.elapsed() >= Duration::from_millis(400) {
+                    self.settings.window_w = size.x.round();
+                    self.settings.window_h = size.y.round();
+                    if let Err(e) = self.settings.save() {
+                        self.status = Some(format!("Couldn't save the window size: {e}"));
+                    }
+                    self.pending_size = None;
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
+            _ => {
+                self.pending_size = Some((size, std::time::Instant::now()));
+                ctx.request_repaint_after(Duration::from_millis(450));
+            }
+        }
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -1150,7 +1253,7 @@ impl Picker {
             self.selected = row;
             match choice {
                 MenuChoice::Key(action) => self.run_action(ctx, action),
-                MenuChoice::ClipAction(n) => self.run_clip_action(ctx, n),
+                MenuChoice::ClipAction(n, then) => self.run_clip_action(ctx, n, then),
             }
         }
         if double_clicked {
@@ -1199,9 +1302,29 @@ impl Picker {
             ui.menu_button(label, |ui| {
                 ui.set_min_width(170.0);
                 for (n, action) in self.settings.actions.iter().enumerate() {
-                    if ui.button(&action.name).clicked() {
-                        chosen = Some(MenuChoice::ClipAction(n));
+                    if action.then == Then::Run {
+                        if ui.button(&action.name).clicked() {
+                            chosen = Some(MenuChoice::ClipAction(n, None));
+                        }
+                        continue;
                     }
+                    ui.menu_button(&action.name, |ui| {
+                        ui.set_min_width(190.0);
+                        let ways = [
+                            (Then::Paste, "Paste to active window", Action::Paste),
+                            (Then::Type, "Type out", Action::Type),
+                            (Then::Copy, "Copy to clipboard", Action::Copy),
+                        ];
+                        for (then, label, key) in ways {
+                            let mut button = egui::Button::new(label);
+                            if let Some(k) = self.keys.label(key) {
+                                button = button.shortcut_text(k);
+                            }
+                            if ui.add(button).clicked() {
+                                chosen = Some(MenuChoice::ClipAction(n, Some(then)));
+                            }
+                        }
+                    });
                 }
             });
             ui.separator();
@@ -1420,6 +1543,27 @@ impl eframe::App for Picker {
             ctx.send_viewport_cmd(ViewportCommand::Close);
             return;
         }
+        // The window's close button hides the resident picker (Quit is in
+        // the tray menu).
+        if self.mode == Mode::Resident && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            if self.visible {
+                self.close(ctx, true);
+            }
+        }
+        match OPEN_REQUESTED.swap(0, Ordering::SeqCst) {
+            0 => {}
+            n => {
+                if !self.visible {
+                    self.show(ctx);
+                } else {
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                }
+                if n == 2 && self.view != View::Settings {
+                    self.enter_settings();
+                }
+            }
+        }
         if TOGGLE_REQUESTED.swap(false, Ordering::SeqCst) {
             if self.visible {
                 self.close(ctx, true);
@@ -1461,13 +1605,25 @@ impl eframe::App for Picker {
             .inner_margin(10.0)
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
+                // Drag the window by its background: the margins, the footer,
+                // the frame (widgets on top keep their own clicks and drags).
+                let drag = ui.interact(ui.max_rect().expand(10.0), ui.id().with("window_drag"), Sense::drag());
+                if drag.drag_started_by(egui::PointerButton::Primary) {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                // macOS: room for the traffic lights above the search field.
+                if cfg!(target_os = "macos") {
+                    ui.add_space(20.0);
+                }
                 if self.view == View::Settings {
                     self.settings_page(ui, &ctx, &t);
                     return;
                 }
                 let full = ui.available_rect_before_wrap();
-                let pane = self.settings.show_preview && full.width() > LIST_W;
-                let column = if pane { full.with_max_x(full.left() + LIST_W - 20.0) } else { full };
+                // The pane needs some room; the list keeps ~58% (at most its default width).
+                let pane = self.settings.show_preview && full.width() >= 560.0;
+                let list_w = (full.width() * 0.58).min(LIST_W - 20.0);
+                let column = if pane { full.with_max_x(full.left() + list_w) } else { full };
                 let mut left = ui.new_child(egui::UiBuilder::new().max_rect(column).layout(egui::Layout::top_down(egui::Align::Min)));
                 self.header(&mut left, &t);
                 left.add_space(8.0);
@@ -1488,6 +1644,36 @@ impl eframe::App for Picker {
                     self.confirm_dialog(&ctx, &t);
                 }
             });
+        if !NATIVE_FRAME {
+            resize_edges(ui, &ctx);
+        }
+        self.remember_size(&ctx);
+    }
+}
+
+/// Frameless window (Linux): resize from the edges and corners.
+fn resize_edges(ui: &egui::Ui, ctx: &egui::Context) {
+    use egui::{CursorIcon as C, Rect, ResizeDirection as D};
+    let r = ui.max_rect();
+    let (e, c) = (5.0, 14.0); // edge thickness, corner size
+    let zones = [
+        (Rect::from_min_max(r.min, pos2(r.left() + c, r.top() + c)), D::NorthWest, C::ResizeNorthWest),
+        (Rect::from_min_max(pos2(r.right() - c, r.top()), pos2(r.right(), r.top() + c)), D::NorthEast, C::ResizeNorthEast),
+        (Rect::from_min_max(pos2(r.left(), r.bottom() - c), pos2(r.left() + c, r.bottom())), D::SouthWest, C::ResizeSouthWest),
+        (Rect::from_min_max(r.max - vec2(c, c), r.max), D::SouthEast, C::ResizeSouthEast),
+        (Rect::from_min_max(pos2(r.left() + c, r.top()), pos2(r.right() - c, r.top() + e)), D::North, C::ResizeNorth),
+        (Rect::from_min_max(pos2(r.left() + c, r.bottom() - e), pos2(r.right() - c, r.bottom())), D::South, C::ResizeSouth),
+        (Rect::from_min_max(pos2(r.left(), r.top() + c), pos2(r.left() + e, r.bottom() - c)), D::West, C::ResizeWest),
+        (Rect::from_min_max(pos2(r.right() - e, r.top() + c), pos2(r.right(), r.bottom() - c)), D::East, C::ResizeEast),
+    ];
+    for (i, (rect, dir, cursor)) in zones.into_iter().enumerate() {
+        let resp = ui.interact(rect, egui::Id::new(("resize_edge", i)), Sense::drag());
+        if resp.hovered() || resp.dragged() {
+            ctx.set_cursor_icon(cursor);
+        }
+        if resp.drag_started_by(egui::PointerButton::Primary) {
+            ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+        }
     }
 }
 

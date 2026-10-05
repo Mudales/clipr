@@ -35,6 +35,11 @@ pub struct Settings {
     pub show_preview: bool,
     pub show_numbers: bool,
     pub show_footer: bool,
+    /// Menu-bar (macOS) / tray (Windows, Linux) icon.
+    pub show_tray: bool,
+    /// The list window's size, as the user last resized it (0 = default).
+    pub window_w: f32,
+    pub window_h: f32,
     /// Copies made in these apps are never saved (app name or bundle id on
     /// macOS, window class on Linux; case-insensitive).
     pub ignore_apps: Vec<String>,
@@ -63,6 +68,9 @@ impl Default for Settings {
             show_preview: true,
             show_numbers: true,
             show_footer: true,
+            show_tray: true,
+            window_w: 0.0,
+            window_h: 0.0,
             ignore_apps: Vec::new(),
             ignore_patterns: Vec::new(),
             keep_clipboard: true,
@@ -119,6 +127,9 @@ impl Settings {
                 "show_preview" => s.show_preview = b.unwrap_or(s.show_preview),
                 "show_numbers" => s.show_numbers = b.unwrap_or(s.show_numbers),
                 "show_footer" => s.show_footer = b.unwrap_or(s.show_footer),
+                "show_tray" => s.show_tray = b.unwrap_or(s.show_tray),
+                "window_w" => s.window_w = value.parse().unwrap_or(0.0),
+                "window_h" => s.window_h = value.parse().unwrap_or(0.0),
                 "ignore_app" if !value.is_empty() => s.ignore_apps.push(value.to_owned()),
                 "ignore_pattern" if !value.is_empty() => s.ignore_patterns.push(value.to_owned()),
                 "keep_clipboard" => s.keep_clipboard = b.unwrap_or(s.keep_clipboard),
@@ -154,6 +165,11 @@ impl Settings {
         kv("show_preview", self.show_preview.to_string());
         kv("show_numbers", self.show_numbers.to_string());
         kv("show_footer", self.show_footer.to_string());
+        kv("show_tray", self.show_tray.to_string());
+        if self.window_w > 0.0 && self.window_h > 0.0 {
+            kv("window_w", format!("{:.0}", self.window_w));
+            kv("window_h", format!("{:.0}", self.window_h));
+        }
         for app in &self.ignore_apps {
             kv("ignore_app", app.clone());
         }

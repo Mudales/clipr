@@ -13,23 +13,27 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Then {
     Paste,
+    /// Type the result out as keystrokes (for apps that block paste).
+    Type,
     Copy,
     /// Just run it (e.g. open a link); the output is ignored.
     Run,
 }
 
 impl Then {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Then::Paste => "paste",
+            Then::Type => "type",
             Then::Copy => "copy",
             Then::Run => "run",
         }
     }
 
-    fn parse(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "paste" => Some(Then::Paste),
+            "type" => Some(Then::Type),
             "copy" => Some(Then::Copy),
             "run" => Some(Then::Run),
             _ => None,

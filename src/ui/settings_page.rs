@@ -323,9 +323,17 @@ impl Picker {
             Page::Shortcuts => self.shortcuts(ui, t),
             Page::About => self.about(ui, ctx, t),
         });
+        if self.settings.show_preview != before.show_preview {
+            // The remembered size was for the other layout.
+            self.settings.window_w = 0.0;
+            self.settings.window_h = 0.0;
+        }
         if self.settings != before {
             self.page.message = self.settings.save().err().map(|e| format!("Couldn't save settings: {e}"));
-            if self.settings.theme != before.theme || self.settings.show_preview != before.show_preview {
+            if self.settings.theme != before.theme
+                || self.settings.show_preview != before.show_preview
+                || self.settings.show_tray != before.show_tray
+            {
                 self.apply_settings(ctx);
             }
         }
@@ -391,6 +399,11 @@ impl Picker {
             divider(ui, t);
             row(ui, t, "Shortcut hints at the bottom", None, |ui| {
                 switch(ui, t, &mut s.show_footer);
+            });
+            divider(ui, t);
+            let tray = if cfg!(target_os = "macos") { "Show in menu bar" } else { "Show tray icon" };
+            row(ui, t, tray, Some("Open, Settings and Quit from the icon"), |ui| {
+                switch(ui, t, &mut s.show_tray);
             });
         });
     }
@@ -506,7 +519,7 @@ impl Picker {
                         ui,
                         t,
                         &mut action.then,
-                        &[(Then::Paste, "Paste result"), (Then::Copy, "Copy result"), (Then::Run, "Just run")],
+                        &[(Then::Paste, "Paste"), (Then::Type, "Type out"), (Then::Copy, "Copy"), (Then::Run, "Just run")],
                     );
                 });
                 divider(ui, t);

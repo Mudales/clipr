@@ -11,6 +11,7 @@ mod images;
 mod ipc;
 mod keys;
 mod settings;
+mod tray;
 mod ui;
 mod update;
 

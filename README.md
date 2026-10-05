@@ -34,7 +34,11 @@ most clipboard managers don't: on Wayland (Hyprland, Omarchy) as well as macOS a
 - **Type it out** as keystrokes, for fields and remote desktops that block paste
 - **Saved tab** for snippets you reuse, and **pinned** clips that stay on top
 - **Actions:** run a command on a clip (open link, UPPERCASE, trim, or your own shell
-  command) and paste the result
+  command) and paste, type out or copy the result
+- **Menu bar / tray icon** (macOS, Windows, and the Waybar tray on Linux): open clipr,
+  Settings, Quit
+- **A real window:** drag it anywhere, resize it (the size is remembered), and the usual
+  close / minimize / zoom buttons on macOS and Windows
 - **Preview pane** beside the list: the whole clip, images large, with size and age
 - **Image history** with thumbnails
 - **Undo** a delete, even after clearing the whole history
@@ -104,11 +108,12 @@ Open with ⚙ (next to the tabs) or ⌘/Ctrl + ,. Changes are saved immediately 
   clicking outside, fuzzy or exact search, open at login (macOS, Windows, Linux)
 - **Storage:** history size, save images and how many to keep, clear history now or
   automatically after the computer restarts (always keeps pinned & saved)
-- **Appearance:** system / light / dark theme, image preview, 1–9 hints, footer hints
+- **Appearance:** system / light / dark theme, preview pane, 1–9 hints, footer hints,
+  menu bar / tray icon
 - **Ignore:** apps whose copies are never saved (app name or bundle id on macOS,
   window class on Linux) and regular expressions for text that is never saved
-- **Actions:** commands to run on a clip (⌘/Ctrl+K or right-click → Actions), then paste
-  or copy the result, or just run them. Built-ins: open link, UPPERCASE, lowercase, trim,
+- **Actions:** commands to run on a clip (⌘/Ctrl+K or right-click → Actions), then paste,
+  type out or copy the result (right-click lets you pick each time), or just run them. Built-ins: open link, UPPERCASE, lowercase, trim,
   join lines; or any shell command (the clip on stdin, the result on stdout)
 - **Keyboard shortcuts:** edit every shortcut; invalid entries are flagged and not saved
 - **Updates:** check GitHub for a newer version and install it in place (also `clipr update`)
@@ -147,9 +152,9 @@ needs the permission re-granted (remove the old `clipr` entry first, or run
 
 ## Windows
 
-Installed to `%LOCALAPPDATA%\Programs\clipr` and started at login. Press **Win+Shift+V**
-(Win+V stays Windows' own clipboard history); change it under Settings → Keyboard
-shortcuts. History and settings live in `%APPDATA%\clipr`.
+Installed to `%LOCALAPPDATA%\Programs\clipr` and started at login. Press **Ctrl+Shift+V**,
+or click the tray icon. If another app (e.g. Clipdiary) already holds the shortcut, pick
+another one under Settings → Shortcuts (`Cmd` in keys.conf means Ctrl on Windows). History and settings live in `%APPDATA%\clipr`.
 
 - No permission prompt is needed to paste or type.
 - Windows doesn't let apps send keystrokes to programs running as administrator, so

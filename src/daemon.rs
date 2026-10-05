@@ -60,8 +60,10 @@ pub fn run() -> Result<()> {
             thread::sleep(Duration::from_millis(500));
             toggle_popup();
         }
+        // The tray icon follows the setting (changed from the picker process).
         loop {
-            thread::park();
+            crate::tray::sync(Settings::load().show_tray, "");
+            thread::sleep(Duration::from_secs(2));
         }
     }
 }
@@ -221,13 +223,20 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
         toggle_popup();
         return Ok(());
     }
-    // ACTION <n> <ids>: run action n on the clip(s), then paste / copy the result.
+    // ACTION <n> <ids> [paste|type|copy]: run action n on the clip(s), then
+    // paste / type / copy the result (default: what the action says).
     let (action, arg) = match cmd {
         "ACTION" => {
-            let (n, ids) = arg.split_once(' ').unwrap_or((arg, ""));
-            let n: usize = n.parse().with_context(|| format!("bad command {line:?}"))?;
+            let mut parts = arg.split(' ');
+            let n: usize = parts.next().unwrap_or("").parse().with_context(|| format!("bad command {line:?}"))?;
+            let ids = parts.next().unwrap_or("");
             let settings = Settings::load();
-            let action = settings.actions.get(n).cloned().with_context(|| format!("no action #{n}"))?;
+            let mut action = settings.actions.get(n).cloned().with_context(|| format!("no action #{n}"))?;
+            if let Some(then) = parts.next().and_then(crate::actions::Then::parse) {
+                if action.then != crate::actions::Then::Run {
+                    action.then = then;
+                }
+            }
             (Some(action), ids)
         }
         _ => (None, arg),
@@ -261,6 +270,7 @@ fn handle(line: &str, db: &Db, clipboard: &mut arboard::Clipboard) -> Result<()>
                 clipboard.set_text(&out)?;
                 platform::send_paste()?;
             }
+            (Some(out), crate::actions::Then::Type) => platform::type_text(&out)?,
             (Some(out), _) => clipboard.set_text(&out)?,
             (None, _) => {}
         }
@@ -300,6 +310,23 @@ fn toggle_popup() {
     crate::ui::request_toggle();
 }
 
+/// Opens the picker (from the tray icon), on the Settings page if asked.
+#[cfg(any(target_os = "macos", windows))]
+pub fn open_popup(settings: bool) {
+    let mut popup = POPUP.lock().unwrap();
+    if let Some(front) = platform::frontmost_app() {
+        // Clicking the tray focuses the taskbar; don't paste into that.
+        #[cfg(windows)]
+        let skip = platform::is_shell(front);
+        #[cfg(not(windows))]
+        let skip = false;
+        if !platform::is_own(front) && !skip {
+            popup.prev_app = Some(front);
+        }
+    }
+    crate::ui::request_open(settings);
+}
+
 /// Gives focus back to the app that was active before the picker opened.
 pub fn restore_focus() {
     #[cfg(any(target_os = "macos", windows))]
@@ -312,16 +339,50 @@ pub fn restore_focus() {
 #[cfg(not(any(target_os = "macos", windows)))]
 fn toggle_popup() {
     let mut popup = POPUP.lock().unwrap();
-    if let Some(child) = popup.child.as_mut() {
+    if close_picker(&mut popup) {
+        return;
+    }
+    spawn_picker(&mut popup, false);
+}
+
+/// Opens the picker (from the tray icon), on the Settings page if asked.
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn open_popup(settings: bool) {
+    let mut popup = POPUP.lock().unwrap();
+    close_picker(&mut popup); // if open, reopen fresh so it comes to the front
+    spawn_picker(&mut popup, settings);
+}
+
+/// Tray → Quit: stop the picker and the daemon (the wl-paste watchers die
+/// with us).
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn quit() {
+    close_picker(&mut POPUP.lock().unwrap());
+    std::process::exit(0);
+}
+
+/// Closes a running picker; returns whether one was running.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn close_picker(popup: &mut Popup) -> bool {
+    if let Some(mut child) = popup.child.take() {
         if matches!(child.try_wait(), Ok(None)) {
             let _ = child.kill();
             let _ = child.wait();
-            popup.child = None;
-            return;
+            return true;
         }
     }
+    false
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn spawn_picker(popup: &mut Popup, settings: bool) {
     let exe = std::env::current_exe().unwrap_or_else(|_| "clipr".into());
-    match std::process::Command::new(exe).arg("pick").spawn() {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("pick");
+    if settings {
+        cmd.arg("settings");
+    }
+    match cmd.spawn() {
         Ok(child) => popup.child = Some(child),
         Err(e) => eprintln!("clipr: cannot open picker: {e}"),
     }
