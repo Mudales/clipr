@@ -173,10 +173,14 @@ fn spawn_restart_helper() -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
+        let quote = |p: &std::path::Path| p.display().to_string().replace('\'', "''");
         let exe = std::env::current_exe()?;
+        let log = crate::db::data_dir().join("restart.log");
         let script = format!(
-            "Start-Sleep -Milliseconds 300; Stop-Process -Name clipr -Force; Start-Sleep 1; Start-Process '{}'",
-            exe.display().to_string().replace('\'', "''")
+            "Start-Transcript -Path '{log}' -Force | Out-Null; Start-Sleep -Milliseconds 300; \
+             Stop-Process -Name clipr -Force; Start-Sleep 1; Start-Process '{exe}'; Stop-Transcript | Out-Null",
+            log = quote(&log),
+            exe = quote(&exe),
         );
         let mut cmd = Command::new("powershell");
         cmd.args(["-NoProfile", "-Command", &script]);
@@ -214,20 +218,22 @@ fn spawn_installer() -> std::io::Result<()> {
     spawn_outliving(cmd)
 }
 
-/// Starts a hidden helper that must outlive this clipr: detached, and out of
-/// our job object if we're in one (e.g. started by Task Scheduler), since a
-/// job can kill its processes when clipr exits.
+/// Starts a hidden helper that must outlive this clipr: with a hidden console
+/// of its own (PowerShell started with no console at all, DETACHED_PROCESS,
+/// exits without running anything), and out of our job object if we're in
+/// one (e.g. started by Task Scheduler), since a job can kill its processes
+/// when clipr exits.
 #[cfg(windows)]
 fn spawn_outliving(mut cmd: Command) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
     match cmd.spawn() {
         Ok(_) => Ok(()),
         // The job doesn't allow breaking away: start it inside, then.
-        Err(_) => cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS).spawn().map(|_| ()),
+        Err(_) => cmd.creation_flags(CREATE_NO_WINDOW).spawn().map(|_| ()),
     }
 }
 

@@ -60,11 +60,12 @@ pub fn hidden(cmd: &mut Command) -> &mut Command {
 
 fn main() -> ExitCode {
     // As a GUI app on Windows we have no console; borrow the terminal's when
-    // started from one, so `clipr --version` etc. still print.
+    // started from one, so `clipr --version` etc. still print. Not for the app
+    // itself: attached, it would be closed along with that terminal window.
     #[cfg(windows)]
-    unsafe {
+    if !matches!(std::env::args().nth(1).as_deref(), None | Some("daemon" | "pick")) {
         use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
     }
     let result = match std::env::args().nth(1).as_deref() {
         None | Some("daemon") => daemon::run(),

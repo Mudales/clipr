@@ -90,6 +90,17 @@ pub fn request_quit() {
 }
 static CONTEXT: OnceLock<egui::Context> = OnceLock::new();
 
+static HIDE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Hide the resident picker (Windows: the title bar's ✕). Any thread.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn request_hide() {
+    HIDE_REQUESTED.store(true, Ordering::SeqCst);
+    if let Some(ctx) = CONTEXT.get() {
+        ctx.request_repaint();
+    }
+}
+
 /// 1 = open the picker, 2 = open it on Settings (tray menu).
 static OPEN_REQUESTED: AtomicU8 = AtomicU8::new(0);
 
@@ -173,6 +184,8 @@ struct Picker {
     marked: HashSet<i64>,
     /// Decoded thumbnails by clip id (`None` = failed to load).
     thumbs: RefCell<HashMap<i64, Option<egui::TextureHandle>>>,
+    /// The window's close button was being handled last pass.
+    close_seen: bool,
     /// When we last resized the window ourselves.
     sized_at: std::cell::Cell<Option<Instant>>,
     /// A size the user is resizing to, and since when it's been steady.
@@ -443,6 +456,7 @@ impl Picker {
             view_height: 0.0,
             thumbs: RefCell::default(),
             sized_at: Default::default(),
+            close_seen: false,
             pending_size: None,
             marked: HashSet::new(),
             status: None,
@@ -570,7 +584,10 @@ impl Picker {
         #[cfg(any(target_os = "macos", windows))]
         crate::platform::activate_self();
         #[cfg(windows)]
-        crate::platform::round_corners();
+        {
+            crate::platform::round_corners();
+            crate::platform::hide_on_close();
+        }
     }
 
     /// `restore_focus`: give focus back to the app that was active before
@@ -1553,11 +1570,19 @@ impl eframe::App for Picker {
         }
         // The window's close button hides the resident picker (Quit is in
         // the tray menu).
-        if self.mode == Mode::Resident && ctx.input(|i| i.viewport().close_requested()) {
+        // A close request can linger for several passes while the window is
+        // hidden, so keep cancelling it but hide only when it first arrives
+        // (or the next show would be closed again right away).
+        let close = self.mode == Mode::Resident && ctx.input(|i| i.viewport().close_requested());
+        if close {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            if self.visible {
+            if !self.close_seen && self.visible {
                 self.close(ctx, true);
             }
+        }
+        self.close_seen = close;
+        if HIDE_REQUESTED.swap(false, Ordering::SeqCst) && self.visible {
+            self.close(ctx, true);
         }
         match OPEN_REQUESTED.swap(0, Ordering::SeqCst) {
             0 => {}

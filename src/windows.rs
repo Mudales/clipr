@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+    GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
 };
 
 const VK_V: VIRTUAL_KEY = 0x56;
@@ -104,8 +104,58 @@ pub fn activate(handle: isize) {
     }
 }
 
+/// Our window titled "clipr" (not, say, an Explorer window on a folder of
+/// that name).
 fn picker_window() -> HWND {
-    unsafe { FindWindowW(std::ptr::null(), wide("clipr").as_ptr()) }
+    use windows_sys::Win32::Foundation::{LPARAM, TRUE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW};
+    unsafe extern "system" fn each(hwnd: HWND, found: LPARAM) -> i32 {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        if pid == std::process::id() {
+            let mut buf = [0u16; 16];
+            let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+            if String::from_utf16_lossy(&buf[..n.max(0) as usize]) == "clipr" {
+                unsafe { *(found as *mut HWND) = hwnd };
+                return 0; // stop
+            }
+        }
+        TRUE
+    }
+    let mut found: HWND = std::ptr::null_mut();
+    unsafe { EnumWindows(Some(each), &mut found as *mut HWND as LPARAM) };
+    found
+}
+
+/// The window procedure we replaced in `hide_on_close`.
+static WINDOW_PROC: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// The title bar's ✕ hides the picker (clipr keeps running). Done here,
+/// ahead of winit: the close request otherwise gets lost and the window is
+/// destroyed under the app. Safe to call repeatedly.
+pub fn hide_on_close() {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CallWindowProcW, GWLP_WNDPROC, SetWindowLongPtrW, WM_CLOSE, WNDPROC};
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if msg == WM_CLOSE {
+            crate::ui::request_hide();
+            return 0;
+        }
+        let prev: WNDPROC = unsafe { std::mem::transmute(WINDOW_PROC.load(Ordering::SeqCst)) };
+        unsafe { CallWindowProcW(prev, hwnd, msg, wparam, lparam) }
+    }
+
+    if WINDOW_PROC.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let hwnd = picker_window();
+    if hwnd.is_null() {
+        return;
+    }
+    let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, proc as *const () as isize) };
+    WINDOW_PROC.store(prev, Ordering::SeqCst);
 }
 
 /// Brings the picker to the front. Windows only lets the app that received

@@ -55,6 +55,6 @@ Start-Process $exe
 Write-Host ''
 Write-Host "clipr is installed and running ($exe)."
 Write-Host ''
-Write-Host '  - Press Win+Shift+V to open it (change it in Settings: gear icon or Ctrl+,).'
+Write-Host '  - Press Ctrl+Shift+V or click the tray icon to open it (change the shortcut in Settings).'
 Write-Host '  - Win+V stays Windows'' own clipboard history.'
 Write-Host '  - clipr can''t paste into apps running as administrator unless it runs as administrator too.'
