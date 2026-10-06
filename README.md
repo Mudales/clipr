@@ -164,8 +164,15 @@ another one under Settings → Shortcuts (`Cmd` in keys.conf means Ctrl on Windo
 ## Linux (Hyprland / Omarchy)
 
 Use the one-line installer above. It installs `~/.local/bin/clipr` (and `wtype`, which
-sends the paste keystroke) and prints the lines to add to your Hyprland config.
+sends the paste keystroke) and adds clipr to your Hyprland config: **SUPER+SHIFT+V**
+opens it, it starts at login, and its window floats. Nothing to edit by hand. The added
+lines are marked "added by the clipr installer" (the original files are kept as
+`*.before-clipr`), and `--uninstall` removes them. If your config already mentions clipr
+it is left alone; if SUPER+SHIFT+V is taken, pick another key yourself. Set
+`CLIPR_NO_CONFIG=1` to skip this and add the lines yourself.
 `wl-clipboard` is used for instant capture and image history.
+
+The lines it adds:
 
 **Hyprland 0.56+ / Omarchy (Lua config; `hyprland.conf` is ignored):**
 

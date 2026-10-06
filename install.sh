@@ -145,35 +145,63 @@ install_linux() {
     echo
     echo "clipr is installed at $LINUX_BIN and running."
     echo
-    if grep -qs "clipr" "$HOME"/.config/hypr/*.lua "$HOME"/.config/hypr/*.conf 2>/dev/null; then
-        echo "Your Hyprland config already starts clipr — nothing to add."
-    elif [ -f "$HOME/.config/hypr/hyprland.lua" ]; then
-        # Hyprland 0.56+ / Omarchy: Lua config (hyprland.conf is ignored).
-        cat <<EOF
-Your Hyprland uses a Lua config. Add these lines, then run 'hyprctl reload'
-(pick another key if SUPER + SHIFT + V is taken):
+    configure_hyprland
+}
 
-  ~/.config/hypr/bindings.lua:
-    o.bind("SUPER + SHIFT + V", "clipr clipboard history", os.getenv("HOME") .. "/.local/bin/clipr toggle")
+# Adds the shortcut (SUPER+SHIFT+V), start at login and the window rule to the
+# Hyprland config, so there's nothing to edit by hand. Every added line is
+# marked, so --uninstall can take exactly those out again. Skipped when the
+# config already mentions clipr, or with CLIPR_NO_CONFIG=1.
+HYPR="$HOME/.config/hypr"
+MARK="added by the clipr installer"
 
-  ~/.config/hypr/autostart.lua:
-    o.launch_on_start(os.getenv("HOME") .. "/.local/bin/clipr")
-
-  ~/.config/hypr/hyprland.lua (at the end):
-    o.window("^(clipr)$", { float = true, center = true, stay_focused = true, tag = "-default-opacity", opacity = "1.0 1.0" })
-EOF
-    else
-        cat <<EOF
-Add this to ~/.config/hypr/hyprland.conf, then run 'hyprctl reload'
-(pick another key if SUPER SHIFT V is taken):
-
-  exec-once = $LINUX_BIN
-  bind = SUPER SHIFT, V, exec, $LINUX_BIN toggle
-  windowrule = float, class:^(clipr)$
-  windowrule = center, class:^(clipr)$
-  windowrule = stayfocused, class:^(clipr)$
-EOF
+configure_hyprland() {
+    [ -d "$HYPR" ] || return 0
+    if [ -n "${CLIPR_NO_CONFIG:-}" ]; then
+        echo "Skipped the Hyprland config (CLIPR_NO_CONFIG). See the README for the lines to add."
+        return 0
     fi
+    if grep -qs "clipr" "$HYPR"/*.lua "$HYPR"/*.conf; then
+        echo "Your Hyprland config already starts clipr — nothing to add."
+        return 0
+    fi
+    key_taken=""
+    if [ -f "$HYPR/hyprland.lua" ]; then
+        # Hyprland 0.56+ / Omarchy: Lua config (hyprland.conf is ignored).
+        grep -qsE '"SUPER ?\+ ?SHIFT ?\+ ?V"' "$HYPR"/*.lua "$HOME"/.local/share/omarchy/default/hypr/*.lua && key_taken=1
+        [ -f "$HYPR/bindings.lua" ] && bindings="$HYPR/bindings.lua" || bindings="$HYPR/hyprland.lua"
+        [ -f "$HYPR/autostart.lua" ] && autostart="$HYPR/autostart.lua" || autostart="$HYPR/hyprland.lua"
+        [ -n "$key_taken" ] || add_line "$bindings" \
+            "o.bind(\"SUPER + SHIFT + V\", \"clipr clipboard history\", os.getenv(\"HOME\") .. \"/.local/bin/clipr toggle\") -- $MARK"
+        add_line "$autostart" "o.launch_on_start(os.getenv(\"HOME\") .. \"/.local/bin/clipr\") -- $MARK"
+        add_line "$HYPR/hyprland.lua" \
+            "o.window(\"^(clipr)\$\", { float = true, center = true, stay_focused = true, tag = \"-default-opacity\", opacity = \"1.0 1.0\" }) -- $MARK"
+    elif [ -f "$HYPR/hyprland.conf" ]; then
+        grep -qsiE '^\s*bind\s*=\s*SUPER\s*SHIFT\s*,\s*V\s*,' "$HYPR"/*.conf && key_taken=1
+        conf="$HYPR/hyprland.conf"
+        add_line "$conf" "exec-once = $LINUX_BIN # $MARK"
+        [ -n "$key_taken" ] || add_line "$conf" "bind = SUPER SHIFT, V, exec, $LINUX_BIN toggle # $MARK"
+        add_line "$conf" "windowrule = float, class:^(clipr)\$ # $MARK"
+        add_line "$conf" "windowrule = center, class:^(clipr)\$ # $MARK"
+        add_line "$conf" "windowrule = stayfocused, class:^(clipr)\$ # $MARK"
+    else
+        return 0
+    fi
+    command -v hyprctl >/dev/null 2>&1 && hyprctl reload >/dev/null 2>&1 || true
+    if [ -n "$key_taken" ]; then
+        echo "Added clipr to your Hyprland config. SUPER+SHIFT+V is already used, so pick a key"
+        echo "for '$LINUX_BIN toggle' yourself (or open clipr from the tray icon / app launcher)."
+    else
+        echo "Added clipr to your Hyprland config: press SUPER+SHIFT+V to open it."
+    fi
+}
+
+# Appends a line to a config file, keeping a one-time backup of the original.
+add_line() {
+    [ -f "$1.before-clipr" ] || cp "$1" "$1.before-clipr" 2>/dev/null || true
+    # Start on a new line if the file doesn't end with one.
+    [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ] && printf '\n' >> "$1"
+    printf '%s\n' "$2" >> "$1"
 }
 
 # Makes clipr show up in app launchers (Omarchy's SUPER+SPACE, rofi, walker…).
@@ -217,7 +245,12 @@ EOF
 uninstall_linux() {
     pkill -x clipr 2>/dev/null || true
     rm -f "$LINUX_BIN" "$LINUX_DESKTOP" "$LINUX_ICON"
-    say "Removed clipr (history kept in ~/.local/share/clipr). Remove the lines from your Hyprland config."
+    for f in "$HYPR"/*.lua "$HYPR"/*.conf; do
+        [ -f "$f" ] && grep -q "$MARK" "$f" && sed -i "/$MARK/d" "$f"
+    done
+    command -v hyprctl >/dev/null 2>&1 && hyprctl reload >/dev/null 2>&1 || true
+    say "Removed clipr (history kept in ~/.local/share/clipr)."
+    grep -qs "clipr" "$HYPR"/*.lua "$HYPR"/*.conf && echo "Your Hyprland config still has clipr lines you added yourself." || true
 }
 
 # ---------------------------------------------------------------- main
