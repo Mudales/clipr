@@ -3,11 +3,16 @@
 
 use anyhow::{Result, anyhow, bail};
 use core_foundation::base::TCFType;
+use core_foundation::base::CFRelease;
 use core_foundation::boolean::CFBoolean;
+use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-use core_foundation::string::CFString;
+use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use objc2_app_kit::{
@@ -26,11 +31,87 @@ const SKIP_TYPES: &[&str] = &[
 const KEY_V: CGKeyCode = 9; // kVK_ANSI_V
 const KEY_RETURN: CGKeyCode = 36;
 const KEY_TAB: CGKeyCode = 48;
+const KEY_SHIFT: CGKeyCode = 56;
+const KEY_OPTION: CGKeyCode = 58;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
     fn CGEventSourceFlagsState(state: i32) -> u64;
+}
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    static kTISPropertyUnicodeKeyLayoutData: CFStringRef;
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+    fn TISGetInputSourceProperty(source: *mut c_void, key: CFStringRef) -> *const c_void;
+    fn LMGetKbdType() -> u8;
+    fn UCKeyTranslate(
+        layout: *const u8,
+        key: u16,
+        action: u16,
+        modifiers: u32,
+        keyboard_type: u32,
+        options: u32,
+        dead_key_state: *mut u32,
+        max_len: usize,
+        len: *mut usize,
+        chars: *mut u16,
+    ) -> i32;
+}
+
+/// The characters of the current keyboard layout → the key (with Shift /
+/// Option) that types them.
+type Layout = HashMap<char, (CGKeyCode, CGEventFlags)>;
+
+static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
+
+/// Reads the current keyboard layout, for `type_text`. Main thread only (the
+/// layout functions abort elsewhere), so this runs when the picker opens.
+pub fn read_keyboard_layout() {
+    *LAYOUT.lock().unwrap() = unsafe { current_layout() };
+}
+
+unsafe fn current_layout() -> Option<Layout> {
+    unsafe {
+        let source = TISCopyCurrentKeyboardLayoutInputSource();
+        if source.is_null() {
+            return None;
+        }
+        let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) as CFDataRef;
+        let layout = (!data.is_null()).then(|| {
+            let uchr = CFDataGetBytePtr(data);
+            let keyboard_type = LMGetKbdType() as u32;
+            // UCKeyTranslate's modifiers: Carbon's shiftKey / optionKey >> 8.
+            let combos = [
+                (0, CGEventFlags::CGEventFlagNull),
+                (2, CGEventFlags::CGEventFlagShift),
+                (8, CGEventFlags::CGEventFlagAlternate),
+                (10, CGEventFlags::CGEventFlagShift | CGEventFlags::CGEventFlagAlternate),
+            ];
+            let mut layout = Layout::new();
+            // Fewest modifiers first; main keys come before the keypad.
+            for (modifiers, flags) in combos {
+                for key in 0..128u16 {
+                    let (mut dead, mut len, mut buf) = (0u32, 0usize, [0u16; 4]);
+                    let status = UCKeyTranslate(uchr, key, 0, modifiers, keyboard_type, 0, &mut dead, buf.len(), &mut len, buf.as_mut_ptr());
+                    // Skip dead keys (they type nothing by themselves).
+                    if status != 0 || dead != 0 || len == 0 {
+                        continue;
+                    }
+                    let mut chars = char::decode_utf16(buf[..len].iter().copied());
+                    if let (Some(Ok(ch)), None) = (chars.next(), chars.next())
+                        && !ch.is_control()
+                    {
+                        layout.entry(ch).or_insert((key, flags));
+                    }
+                }
+            }
+            layout
+        });
+        CFRelease(source as _);
+        layout
+    }
 }
 
 /// Whether we may send keystrokes. With `prompt`, macOS shows its
@@ -64,15 +145,36 @@ fn source() -> Result<CGEventSource> {
     CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| anyhow!("no event source"))
 }
 
+fn post_event(src: &CGEventSource, key: CGKeyCode, down: bool, flags: CGEventFlags, text: Option<&str>) -> Result<()> {
+    let event =
+        CGEvent::new_keyboard_event(src.clone(), key, down).map_err(|_| anyhow!("cannot create key event"))?;
+    if let Some(text) = text {
+        event.set_string(text);
+    }
+    event.set_flags(flags);
+    event.post(CGEventTapLocation::HID);
+    Ok(())
+}
+
 fn post_key(src: &CGEventSource, key: CGKeyCode, flags: CGEventFlags, text: Option<&str>) -> Result<()> {
-    for down in [true, false] {
-        let event = CGEvent::new_keyboard_event(src.clone(), key, down)
-            .map_err(|_| anyhow!("cannot create key event"))?;
-        if let Some(text) = text {
-            event.set_string(text);
-        }
-        event.set_flags(flags);
-        event.post(CGEventTapLocation::HID);
+    post_event(src, key, true, flags, text)?;
+    post_event(src, key, false, flags, text)
+}
+
+/// Presses `key` like a person would, holding Shift / Option as real keys:
+/// remote-desktop apps (Windows App…) send the keys, not the text.
+fn post_stroke(src: &CGEventSource, key: CGKeyCode, flags: CGEventFlags, text: &str) -> Result<()> {
+    let none = CGEventFlags::CGEventFlagNull;
+    let modifiers = [(CGEventFlags::CGEventFlagShift, KEY_SHIFT), (CGEventFlags::CGEventFlagAlternate, KEY_OPTION)];
+    let mut held = none;
+    for (flag, modifier) in modifiers.into_iter().filter(|(flag, _)| flags.contains(*flag)) {
+        held |= flag;
+        post_event(src, modifier, true, held, None)?;
+    }
+    post_key(src, key, flags, Some(text))?;
+    for (flag, modifier) in modifiers.into_iter().rev().filter(|(flag, _)| flags.contains(*flag)) {
+        held.remove(flag);
+        post_event(src, modifier, false, held, None)?;
     }
     Ok(())
 }
@@ -83,18 +185,23 @@ pub fn send_paste() -> Result<()> {
     post_key(&src, KEY_V, CGEventFlags::CGEventFlagCommand, None)
 }
 
-/// Types the text one character at a time, like a (fast) human would.
+/// Types the text one character at a time, like a (fast) human would: each
+/// with the key that types it on the current layout. Characters the layout
+/// doesn't have go as text only (most apps take it; remote desktops don't).
 pub fn type_text(text: &str) -> Result<()> {
     let src = source()?;
     wait_for_modifiers_released();
+    let layout = LAYOUT.lock().unwrap().clone().unwrap_or_default();
     let none = CGEventFlags::CGEventFlagNull;
     let mut buf = [0u8; 4];
     for ch in text.chars() {
-        match ch {
-            '\r' => continue, // \r\n → one Return
-            '\n' => post_key(&src, KEY_RETURN, none, None)?,
-            '\t' => post_key(&src, KEY_TAB, none, None)?,
-            _ => post_key(&src, 0, none, Some(ch.encode_utf8(&mut buf)))?,
+        let text = ch.encode_utf8(&mut buf);
+        match (ch, layout.get(&ch)) {
+            ('\r', _) => continue, // \r\n → one Return
+            ('\n', _) => post_key(&src, KEY_RETURN, none, None)?,
+            ('\t', _) => post_key(&src, KEY_TAB, none, None)?,
+            (_, Some(&(key, flags))) => post_stroke(&src, key, flags, text)?,
+            (_, None) => post_key(&src, 0, none, Some(text))?,
         }
         sleep(Duration::from_millis(3));
     }

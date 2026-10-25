@@ -583,6 +583,8 @@ impl Picker {
         ctx.send_viewport_cmd(ViewportCommand::Focus);
         #[cfg(any(target_os = "macos", windows))]
         crate::platform::activate_self();
+        #[cfg(target_os = "macos")]
+        crate::platform::read_keyboard_layout(); // for typing out
         #[cfg(windows)]
         {
             crate::platform::round_corners();

@@ -451,10 +451,13 @@ dependencies = [
  "rusqlite",
  "tray-icon",
  "unicode-bidi",
+ "wayland-client",
+ "wayland-protocols-misc",
  "windows-sys 0.61.2",
  "winit",
  "winresource",
  "wl-clipboard-rs",
+ "xkbcommon-dl",
 ]
 
 [[package]]

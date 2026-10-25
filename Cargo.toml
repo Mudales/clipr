@@ -36,6 +36,9 @@ libc = "0.2.189"
 [target.'cfg(target_os = "linux")'.dependencies]
 wl-clipboard-rs = "0.9"
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+xkbcommon-dl = "0.4"
 
 [target."cfg(windows)".dependencies]
 global-hotkey = "0.8"
