@@ -1,8 +1,10 @@
-//! Linux glue. Keystrokes go through `wtype` on Wayland (Hyprland supports the
-//! virtual-keyboard protocol) and `xdotool` on X11.
+//! Linux glue. Keystrokes go through a virtual keyboard or `wtype` on Wayland
+//! (Hyprland supports the virtual-keyboard protocol) and `xdotool` on X11.
 
 use anyhow::{Context, Result, bail};
 use std::process::Command;
+
+mod keyboard;
 
 /// Terminals paste with Ctrl+Shift+V instead of Ctrl+V.
 const TERMINALS: &[&str] = &[
@@ -61,7 +63,7 @@ pub fn send_paste() -> Result<()> {
 
 pub fn type_text(text: &str) -> Result<()> {
     if wayland() {
-        run("wtype", &["--", text])
+        keyboard::type_text(text, |text| run("wtype", &["--", text]))
     } else {
         run("xdotool", &["type", "--clearmodifiers", "--", text])
     }
