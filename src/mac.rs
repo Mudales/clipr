@@ -3,6 +3,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use core_foundation::base::TCFType;
+use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use core_foundation::base::CFRelease;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
@@ -43,7 +44,10 @@ unsafe extern "C" {
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
     static kTISPropertyUnicodeKeyLayoutData: CFStringRef;
+    static kTISPropertyInputSourceCategory: CFStringRef;
+    static kTISCategoryKeyboardInputSource: CFStringRef;
     fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+    fn TISCreateInputSourceList(properties: CFDictionaryRef, include_all_installed: bool) -> CFArrayRef;
     fn TISGetInputSourceProperty(source: *mut c_void, key: CFStringRef) -> *const c_void;
     fn LMGetKbdType() -> u8;
     fn UCKeyTranslate(
@@ -60,57 +64,75 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-/// The characters of the current keyboard layout → the key (with Shift /
-/// Option) that types them.
+/// Characters → the key (with Shift / Option) that types them.
 type Layout = HashMap<char, (CGKeyCode, CGEventFlags)>;
 
 static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
 
-/// Reads the current keyboard layout, for `type_text`. Main thread only (the
-/// layout functions abort elsewhere), so this runs when the picker opens.
+/// Reads the keyboard layouts, for `type_text`. Main thread only (the layout
+/// functions abort elsewhere), so this runs when the picker opens.
 pub fn read_keyboard_layout() {
-    *LAYOUT.lock().unwrap() = unsafe { current_layout() };
+    *LAYOUT.lock().unwrap() = unsafe { keyboard_layouts() };
 }
 
-unsafe fn current_layout() -> Option<Layout> {
+/// The current layout, then the other enabled ones (ABC, Hebrew…): text in
+/// another language than the one selected still goes out as real keys.
+unsafe fn keyboard_layouts() -> Option<Layout> {
     unsafe {
-        let source = TISCopyCurrentKeyboardLayoutInputSource();
-        if source.is_null() {
-            return None;
+        let mut layout = Layout::new();
+        let current = TISCopyCurrentKeyboardLayoutInputSource();
+        if !current.is_null() {
+            add_layout(&mut layout, current);
+            CFRelease(current as _);
         }
+        let filter = CFDictionary::from_CFType_pairs(&[(
+            CFString::wrap_under_get_rule(kTISPropertyInputSourceCategory),
+            CFString::wrap_under_get_rule(kTISCategoryKeyboardInputSource),
+        )]);
+        let sources = TISCreateInputSourceList(filter.as_concrete_TypeRef(), false);
+        if !sources.is_null() {
+            for i in 0..CFArrayGetCount(sources) {
+                add_layout(&mut layout, CFArrayGetValueAtIndex(sources, i) as *mut c_void);
+            }
+            CFRelease(sources as _);
+        }
+        (!layout.is_empty()).then_some(layout)
+    }
+}
+
+/// Adds the characters of input source `source` that aren't in `layout` yet.
+unsafe fn add_layout(layout: &mut Layout, source: *mut c_void) {
+    unsafe {
         let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) as CFDataRef;
-        let layout = (!data.is_null()).then(|| {
-            let uchr = CFDataGetBytePtr(data);
-            let keyboard_type = LMGetKbdType() as u32;
-            // UCKeyTranslate's modifiers: Carbon's shiftKey / optionKey >> 8.
-            let combos = [
-                (0, CGEventFlags::CGEventFlagNull),
-                (2, CGEventFlags::CGEventFlagShift),
-                (8, CGEventFlags::CGEventFlagAlternate),
-                (10, CGEventFlags::CGEventFlagShift | CGEventFlags::CGEventFlagAlternate),
-            ];
-            let mut layout = Layout::new();
-            // Fewest modifiers first; main keys come before the keypad.
-            for (modifiers, flags) in combos {
-                for key in 0..128u16 {
-                    let (mut dead, mut len, mut buf) = (0u32, 0usize, [0u16; 4]);
-                    let status = UCKeyTranslate(uchr, key, 0, modifiers, keyboard_type, 0, &mut dead, buf.len(), &mut len, buf.as_mut_ptr());
-                    // Skip dead keys (they type nothing by themselves).
-                    if status != 0 || dead != 0 || len == 0 {
-                        continue;
-                    }
-                    let mut chars = char::decode_utf16(buf[..len].iter().copied());
-                    if let (Some(Ok(ch)), None) = (chars.next(), chars.next())
-                        && !ch.is_control()
-                    {
-                        layout.entry(ch).or_insert((key, flags));
-                    }
+        if data.is_null() {
+            return; // an input method, not a layout
+        }
+        let uchr = CFDataGetBytePtr(data);
+        let keyboard_type = LMGetKbdType() as u32;
+        // UCKeyTranslate's modifiers: Carbon's shiftKey / optionKey >> 8.
+        let combos = [
+            (0, CGEventFlags::CGEventFlagNull),
+            (2, CGEventFlags::CGEventFlagShift),
+            (8, CGEventFlags::CGEventFlagAlternate),
+            (10, CGEventFlags::CGEventFlagShift | CGEventFlags::CGEventFlagAlternate),
+        ];
+        // Fewest modifiers first; main keys come before the keypad.
+        for (modifiers, flags) in combos {
+            for key in 0..128u16 {
+                let (mut dead, mut len, mut buf) = (0u32, 0usize, [0u16; 4]);
+                let status = UCKeyTranslate(uchr, key, 0, modifiers, keyboard_type, 0, &mut dead, buf.len(), &mut len, buf.as_mut_ptr());
+                // Skip dead keys (they type nothing by themselves).
+                if status != 0 || dead != 0 || len == 0 {
+                    continue;
+                }
+                let mut chars = char::decode_utf16(buf[..len].iter().copied());
+                if let (Some(Ok(ch)), None) = (chars.next(), chars.next())
+                    && !ch.is_control()
+                {
+                    layout.entry(ch).or_insert((key, flags));
                 }
             }
-            layout
-        });
-        CFRelease(source as _);
-        layout
+        }
     }
 }
 
@@ -186,8 +208,8 @@ pub fn send_paste() -> Result<()> {
 }
 
 /// Types the text one character at a time, like a (fast) human would: each
-/// with the key that types it on the current layout. Characters the layout
-/// doesn't have go as text only (most apps take it; remote desktops don't).
+/// with the key that types it on the keyboard layouts. Characters no layout
+/// has go as text only (most apps take it; remote desktops don't).
 pub fn type_text(text: &str) -> Result<()> {
     let src = source()?;
     wait_for_modifiers_released();
